@@ -1,0 +1,41 @@
+:root {
+  --smc-navy: #143257;
+  --smc-red:  #D82732;
+  --panel:    #F5F7FA;
+}
+
+.smc-header {
+  background: var(--smc-navy);
+  color: #ffffff;
+  padding: 12px 16px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+  border: 1px solid rgba(20,50,87,0.35);
+}
+
+.smc-title { font-weight: 700; font-size: 1.3rem; margin: 0; }
+.smc-sub { margin: 2px 0 0 0; opacity: 0.9; }
+
+/* Primary buttons */
+.stButton > button {
+  background: var(--smc-red) !important;
+  color: #ffffff !important;
+  border: 2px solid var(--smc-navy) !important;
+  border-radius: 10px !important;
+  font-weight: 700 !important;
+}
+.stButton > button:focus,
+.stButton > button:hover {
+  outline: 3px solid rgba(20,50,87,0.35) !important;
+}
+
+/* Table headers */
+[data-testid="stStyledTable"] th {
+  background: var(--panel) !important;
+  color: var(--smc-navy) !important;
+  font-weight: 700 !important;
+}
+
+/* Metrics */
+[data-testid="stMetricLabel"] { color: var(--smc-navy) !important; font-weight: 600 !important; }
+[data-testid="stMetricValue"] { color: var(--smc-red) !important; font-weight: 800 !important; }

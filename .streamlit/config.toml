@@ -1,0 +1,6 @@
+[theme]
+primaryColor="#D82732"             # SMC Red (buttons, highlights)
+backgroundColor="#FFFFFF"          # white background
+secondaryBackgroundColor="#F5F7FA" # light gray panels
+textColor="#143257"                # Lasallian Navy
+font="sans serif"

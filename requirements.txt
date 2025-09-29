@@ -1,0 +1,7 @@
+streamlit==1.38.0
+pytesseract==0.3.13
+Pillow
+opencv-python-headless
+pandas
+PyYAML
+requests

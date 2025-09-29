@@ -1,0 +1,10 @@
+confidence_threshold: 80
+min_qty: 0
+max_qty: 10000
+normalize_items: false
+normalization_map: {}
+email:
+  from: ""
+  to: ""
+  subject: "Daily Production CSV"
+  body: "Attached is today's CSV."
