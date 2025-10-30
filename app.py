@@ -1,5 +1,5 @@
 # --------------------------------------------------------
-# SMC Dining OCR — Streamlit + Google Vision
+# SMC Dining OCR — Streamlit + Google Vision (Cloud Ready)
 # Author: Jonathan White
 # Date: October 2025
 # --------------------------------------------------------
@@ -28,13 +28,13 @@ st.set_page_config(page_title="SMC Dining OCR", layout="wide")
 SMC_NAVY = "#002855"
 SMC_RED = "#C8102E"
 
-# Load optional custom CSS theme
+# Optional CSS theme
 css_path = Path("assets/theme.css")
 if css_path.exists():
     with open(css_path) as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
-# Path to logo
+# Logo path (optional asset)
 logo_path = "assets/smc_g_logo.png"
 
 # --------------------------------------------------------
@@ -62,34 +62,33 @@ The system reads entries using **Google Cloud Vision API**, cleans and groups �
 """)
 
 # --------------------------------------------------------
-# OCR FUNCTION (works locally or in Streamlit Cloud)
+# OCR FUNCTION — fixed for Streamlit Cloud
 # --------------------------------------------------------
 def extract_text_from_image(uploaded_image):
+    """Extract text from uploaded image using credentials stored in Streamlit Secrets."""
     try:
-        # Try loading credentials from Streamlit Secrets (cloud)
-        key_dict = json.loads(st.secrets["google_cloud"]["vision_key"])
-        credentials = service_account.Credentials.from_service_account_info(key_dict)
+        # ✅ Always load from Streamlit Secrets in cloud
+        credentials_info = st.secrets["gcp_service_account"]
+        credentials = service_account.Credentials.from_service_account_info(dict(credentials_info))
         client = vision.ImageAnnotatorClient(credentials=credentials)
-    except Exception:
-        # Fallback for local testing
-        client = vision.ImageAnnotatorClient.from_service_account_json("vision_key.json")
+    except Exception as e:
+        st.error("❌ Failed to load Google Cloud Vision credentials. Check Streamlit Secrets.")
+        st.stop()
 
     content = uploaded_image.read()
     image = vision.Image(content=content)
-
     response = client.text_detection(image=image)
     texts = response.text_annotations
 
     if not texts:
         return "No text detected."
-
-    full_text = texts[0].description
-    return full_text
+    return texts[0].description
 
 # --------------------------------------------------------
 # PARSE FUNCTION (aggregate like-data)
 # --------------------------------------------------------
 def parse_ocr_text(text):
+    """Cleans OCR text and aggregates quantities of similar menu items."""
     cleaned = re.sub(r'\s+', ' ', text.strip())
     cleaned = re.sub(r'(\d+)\s?1?65\.?', r'\1 lbs', cleaned)
     cleaned = re.sub(r'(\d+)\s?lb[sS]?', r'\1 lbs', cleaned)
@@ -168,7 +167,7 @@ else:
     st.info("Please upload an image to begin.")
 
 # --------------------------------------------------------
-# EMAIL SECTION (no password required)
+# EMAIL SECTION (disabled for security)
 # --------------------------------------------------------
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown(f"""
