@@ -64,7 +64,6 @@ The system reads entries using **Google Cloud Vision API**, cleans and groups �
 # --------------------------------------------------------
 # OCR FUNCTION — fixed for Streamlit Cloud
 # --------------------------------------------------------
-st.write("Secrets available:", list(st.secrets.keys()))
 
 def extract_text_from_image(uploaded_image):
     """Extract text from uploaded image using credentials stored in Streamlit Secrets."""
@@ -169,35 +168,29 @@ else:
     st.info("Please upload an image to begin.")
 
 # --------------------------------------------------------
-# EMAIL SECTION (disabled for security)
+# STEP 2 — DOWNLOAD OR EMAIL LATER
 # --------------------------------------------------------
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown(f"""
 <div style='background-color:{SMC_NAVY};padding:10px;border-radius:6px;'>
-<h3 style='color:white;text-align:center;margin:0;'>Step 2 — Send CSV by Email</h3>
+<h3 style='color:white;text-align:center;margin:0;'>Step 2 — Download or Email Later</h3>
 </div>
 """, unsafe_allow_html=True)
 
-col1, col2 = st.columns(2)
-with col1:
-    sender_email = st.text_input("Your email address (From)")
-with col2:
-    recipient_email = st.text_input("Recipient email address (To)")
+if 'df' in locals() and not df.empty:
+    st.success("✅ Aggregated CSV is ready.")
+    st.markdown("You can download the file below and email it manually if needed.")
+    csv_data = df.to_csv(index=False).encode("utf-8")
 
-note_text = st.text_area("Add a short note", placeholder="e.g., Lunch prep log — 10/22")
-
-if st.button("📤 Send Aggregated CSV Now", use_container_width=True):
-    if "df" not in locals() or df.empty:
-        st.error("No CSV data available. Please upload a valid image first.")
-    elif not sender_email or not recipient_email:
-        st.error("Please enter both sender and recipient email addresses.")
-    else:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-            df.to_csv(tmp.name, index=False)
-            tmp_path = tmp.name
-
-        st.success(f"✅ CSV ready to be sent from {sender_email} to {recipient_email}")
-        st.info("Email sending currently disabled for security — CSV can be sent manually.")
+    st.download_button(
+        label="⬇️ Download Aggregated CSV File",
+        data=csv_data,
+        file_name="aggregated_dining_log.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+else:
+    st.info("No CSV available yet — please upload and process an image first.")
 
 st.markdown("<br><hr>", unsafe_allow_html=True)
 st.caption("Saint Mary’s College Dining Data Project · Developed by Jonathan White")
