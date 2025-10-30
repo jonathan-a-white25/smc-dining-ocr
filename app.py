@@ -35,7 +35,16 @@ if css_path.exists():
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 # Logo path (optional asset)
-logo_path = "assets/smc_g_logo.png"
+import base64
+from pathlib import Path
+
+logo_path = Path("assets/smc_g_logo.png")
+
+def load_logo_base64(logo_path):
+    with open(logo_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+logo_data = load_logo_base64(logo_path)
 
 # --------------------------------------------------------
 # TOP BANNER
@@ -45,9 +54,9 @@ st.markdown(
     <div style="background-color:{SMC_NAVY};padding:15px 25px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;">
         <div>
             <h1 style="color:white;margin-bottom:4px;">📋 SMC Dining OCR</h1>
-            <p style="color:white;margin-top:0;font-size:16px;">Built by Jonathan White · Powered by Google Cloud Vision API</p>
+            <p style="color:white;margin-top:0;font-size:16px;">Built by Group 1 · Powered by Google Cloud Vision API</p>
         </div>
-        <img src="{logo_path}" width="80" style="border-radius:6px;margin-left:10px;">
+            <img src="data:image/png;base64,{logo_data}" width="80" style="border-radius:6px;margin-left:10px;">
     </div>
     """,
     unsafe_allow_html=True
@@ -57,8 +66,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 st.write("""
 Upload a photo of your handwritten prep log.  
-The system reads entries using **Google Cloud Vision API**, cleans and groups “like” items
-(e.g., all broccoli summed together), and allows you to **download or email** the aggregated CSV report.
+The system reads entries using **Google Cloud Vision API**, cleans and groups “like” items, and allows you to **download or email** the aggregated CSV report.
 """)
 
 # --------------------------------------------------------
@@ -193,4 +201,4 @@ else:
     st.info("No CSV available yet — please upload and process an image first.")
 
 st.markdown("<br><hr>", unsafe_allow_html=True)
-st.caption("Saint Mary’s College Dining Data Project · Developed by Jonathan White")
+st.caption("Saint Mary’s College Dining Data Project · Developed by Group 1")
