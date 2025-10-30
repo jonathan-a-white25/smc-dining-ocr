@@ -64,6 +64,8 @@ The system reads entries using **Google Cloud Vision API**, cleans and groups â€
 # --------------------------------------------------------
 # OCR FUNCTION â€” fixed for Streamlit Cloud
 # --------------------------------------------------------
+st.write("Secrets available:", list(st.secrets.keys()))
+
 def extract_text_from_image(uploaded_image):
     """Extract text from uploaded image using credentials stored in Streamlit Secrets."""
     try:
