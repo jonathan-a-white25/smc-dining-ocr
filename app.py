@@ -1,140 +1,192 @@
-import os
-import yaml
-import pandas as pd
+# --------------------------------------------------------
+# SMC Dining OCR — Branded Version
+# Author: Jonathan White
+# Date: October 2025
+# --------------------------------------------------------
+
 import streamlit as st
-from datetime import datetime
+import pandas as pd
+import re
+import io
+import smtplib
+import tempfile
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from google.cloud import vision
+from pathlib import Path
 
-from ocr_items import extract_items_quantities
-from utils import to_csv_bytes, setup_logger, summarize_by_item, sanitize_quantity_range
-from emailer import send_email_with_attachment
+# --------------------------------------------------------
+# PAGE CONFIGURATION
+# --------------------------------------------------------
+st.set_page_config(page_title="SMC Dining OCR", layout="wide")
 
-LOG = setup_logger()
+# SMC Brand Colors
+SMC_NAVY = "#002855"
+SMC_RED = "#C8102E"
+LIGHT_GRAY = "#F7F7F7"
 
-st.set_page_config(
-    page_title="SMC Dining • Production OCR → CSV",
-    page_icon="🍽️",
-    layout="wide"
+# Load CSS theme (optional)
+css_path = Path("assets/theme.css")
+if css_path.exists():
+    with open(css_path) as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+# Path to logo
+logo_path = "assets/smc_g_logo.png"
+
+# Top Banner with Logo
+st.markdown(
+    f"""
+    <div style="background-color:{SMC_NAVY};padding:15px 25px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+            <h1 style="color:white;margin-bottom:4px;">📋 SMC Dining OCR</h1>
+            <p style="color:white;margin-top:0;font-size:16px;">Built by Jonathan White · Powered by Google Cloud Vision API</p>
+        </div>
+        <img src="{logo_path}" width="80" style="border-radius:6px;margin-left:10px;">
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
-# Inject custom CSS
-with open(os.path.join("assets", "theme.css"), "r", encoding="utf-8") as f:
-    st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+st.markdown("<br>", unsafe_allow_html=True)
 
-SMC_NAVY = "#143257"
-SMC_RED = "#D82732"
+st.write("""
+Upload a photo of your handwritten prep log.  
+The system reads entries using **Google Cloud Vision API**, cleans the text,
+groups “like” items together (e.g., all broccoli summed on one line),  
+and allows you to email or download the aggregated CSV report.
+""")
 
-# Defaults (free-text items, no normalization)
-DEFAULT_CONF = {
-    "confidence_threshold": 80,
-    "min_qty": 0,
-    "max_qty": 10000,
-    "email": {"from": "", "to": "", "subject": "Daily Production CSV", "body": "Attached is today's CSV."},
-    "normalize_items": False,
-    "normalization_map": {}
-}
-if os.path.exists("config.yml"):
-    with open("config.yml", "r") as f:
-        loaded = yaml.safe_load(f) or {}
-        for k, v in loaded.items():
-            DEFAULT_CONF[k] = v
+# --------------------------------------------------------
+# OCR FUNCTION
+# --------------------------------------------------------
+def extract_text_from_image(uploaded_image):
+    client = vision.ImageAnnotatorClient.from_service_account_json("vision_key.json")
+    content = uploaded_image.read()
+    image = vision.Image(content=content)
+    response = client.text_detection(image=image)
+    texts = response.text_annotations
 
-# Header with logo
-logo_path = os.path.join("assets", "smc_g_logo.png")
-col1, col2 = st.columns([1, 6], vertical_alignment="center")
-with col1:
-    if os.path.exists(logo_path):
-        st.image(logo_path, width=72)
-with col2:
-    st.markdown(
-        f"""
-        <div class="smc-header">
-          <div class="smc-title">Saint Mary's College • Dining Production OCR</div>
-          <div class="smc-sub">Brand: Lasallian Navy ({SMC_NAVY}) &amp; SMC Red ({SMC_RED})</div>
-        </div>
-        """,
-        unsafe_allow_html=True
+    if not texts:
+        return "No text detected."
+
+    full_text = texts[0].description
+    return full_text
+
+# --------------------------------------------------------
+# PARSE FUNCTION (aggregate like-data)
+# --------------------------------------------------------
+def parse_ocr_text(text):
+    cleaned = re.sub(r'\s+', ' ', text.strip())
+    cleaned = re.sub(r'(\d+)\s?1?65\.?', r'\1 lbs', cleaned)
+    cleaned = re.sub(r'(\d+)\s?lb[sS]?', r'\1 lbs', cleaned)
+
+    pattern = r"(\d{1,2}/\d{1,2})\s+([\d:]{4,5})\s+([A-Za-z\s]+?)\s+(\d+)\s*lbs\.?"
+    rows = re.findall(pattern, cleaned, re.IGNORECASE)
+
+    if not rows:
+        return pd.DataFrame(columns=["Date", "Item", "Total Quantity (lbs)"])
+
+    df = pd.DataFrame(rows, columns=["Date", "Time", "Item", "Quantity"])
+    df["Item"] = df["Item"].str.strip().str.title()
+    df["Quantity"] = df["Quantity"].astype(float)
+
+    # Handle merged items like "Teriyaki Chicken Rice"
+    menu_items = ["Roasted Broccoli", "Teriyaki Chicken", "Rice"]
+    fixed_rows = []
+
+    for _, row in df.iterrows():
+        item = row["Item"]
+        qty = row["Quantity"]
+        found = [m for m in menu_items if m in item]
+        if len(found) > 1:
+            split_qty = qty / len(found)
+            for f in found:
+                fixed_rows.append([row["Date"], f, split_qty])
+        else:
+            fixed_rows.append([row["Date"], item, qty])
+
+    fixed_df = pd.DataFrame(fixed_rows, columns=["Date", "Item", "Quantity"])
+
+    # Aggregate by Date + Item
+    aggregated = (
+        fixed_df.groupby(["Date", "Item"], as_index=False)["Quantity"]
+        .sum()
+        .rename(columns={"Quantity": "Total Quantity (lbs)"})
     )
 
-st.caption(
-    "Upload photos of production logs. The app extracts **Item** (free text) and **Quantity** (digits). "
-    "Low-confidence quantities become **NULL**. Review, edit, export, and email a CSV."
-)
+    aggregated["Total Quantity (lbs)"] = aggregated["Total Quantity (lbs)"].round(1)
+    return aggregated
 
-# Sidebar controls
-with st.sidebar:
-    st.header("Settings")
-    conf_cutoff = st.slider("Confidence threshold (quantity)", 0, 100, int(DEFAULT_CONF["confidence_threshold"]), 5,
-                            help="Quantities with OCR confidence below this threshold become NULL.")
-    min_qty = st.number_input("Min quantity", value=int(DEFAULT_CONF["min_qty"]))
-    max_qty = st.number_input("Max quantity", value=int(DEFAULT_CONF["max_qty"]))
-    st.caption("Quantities outside this range become NULL.")
-    st.divider()
+# --------------------------------------------------------
+# FILE UPLOAD SECTION
+# --------------------------------------------------------
+st.markdown(f"""
+<div style='background-color:{SMC_RED};padding:10px;border-radius:6px;'>
+<h3 style='color:white;text-align:center;margin:0;'>Step 1 — Upload Your Log</h3>
+</div>
+""", unsafe_allow_html=True)
 
-    st.header("Email")
-    sender_email = st.text_input("Sender email", value=DEFAULT_CONF["email"]["from"])
-    recipient_email = st.text_input("Recipient email", value=DEFAULT_CONF["email"]["to"])
-    subject = st.text_input("Subject", value=DEFAULT_CONF["email"]["subject"])
-    body = st.text_area("Body", value=DEFAULT_CONF["email"]["body"], height=100)
-    st.caption("Configure credentials via secrets/env vars (.env, Streamlit Secrets, or platform env).")
+uploaded_file = st.file_uploader("Upload image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
 
-# Upload
-uploaded = st.file_uploader(
-    "Upload one or more photos (JPG/PNG). On mobile, you can take photos directly.",
-    type=["jpg","jpeg","png"], accept_multiple_files=True
-)
+if uploaded_file is not None:
+    with st.spinner("🔍 Reading image... please wait"):
+        text_output = extract_text_from_image(uploaded_file)
 
-all_rows = []
-if uploaded:
-    for f in uploaded:
-        st.subheader(f"Image: {f.name}")
-        st.image(f, use_column_width=True)
+    st.subheader("🧾 OCR Text Preview")
+    st.text_area("Detected Text", text_output, height=200)
 
-        try:
-            df = extract_items_quantities(
-                f,
-                conf_threshold=conf_cutoff,
-                normalize=False,                # keep item text as-is
-                normalization_map={}
-            )
-        except Exception as e:
-            st.error(f"OCR failed for {f.name}: {e}")
-            LOG.exception("OCR failure")
-            continue
+    st.subheader("📊 Parsed & Aggregated Table")
+    df = parse_ocr_text(text_output)
+    st.dataframe(df, use_container_width=True)
 
-        # range sanitize quantities
-        df["quantity"] = df["quantity"].apply(lambda q: sanitize_quantity_range(q, min_qty, max_qty))
-
-        st.caption("Review & edit. Leave blank if quantity should be NULL.")
-        df_edit = st.data_editor(df, use_container_width=True, num_rows="dynamic")
-        all_rows.append(df_edit)
-        st.divider()
-
-    combined = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame(columns=["item","quantity"])
-
-    st.subheader("All Entries (Combined)")
-    st.dataframe(combined, use_container_width=True)
-
-    st.subheader("Aggregate Summary (Totals by Item)")
-    summary = summarize_by_item(combined)
-    st.dataframe(summary, use_container_width=True)
-
-    csv_bytes = to_csv_bytes(combined)
-    default_name = f"smc_dining_production_{datetime.now().strftime('%Y-%m-%d')}.csv"
-    st.download_button("⬇️ Download CSV", data=csv_bytes, file_name=default_name, mime="text/csv")
-
-    if st.button("📧 Email CSV"):
-        try:
-            ok, msg = send_email_with_attachment(
-                sender=sender_email,
-                recipient=recipient_email,
-                subject=subject,
-                body_text=body,
-                attachment_bytes=csv_bytes,
-                attachment_name=default_name
-            )
-            st.success("Email sent ✅" if ok else f"Email failed: {msg}")
-        except Exception as e:
-            LOG.exception("Email send error")
-            st.error(f"Email error: {e}")
+    if not df.empty:
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Download Aggregated CSV",
+            csv,
+            "aggregated_dining_log.csv",
+            "text/csv",
+            use_container_width=True
+        )
+    else:
+        st.warning("No valid table data found. Try a clearer photo or adjust handwriting spacing.")
 else:
-    st.info("Upload at least one photo to begin.")
+    st.info("Please upload an image to begin.")
+
+# --------------------------------------------------------
+# EMAIL SECTION (no password)
+# --------------------------------------------------------
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(f"""
+<div style='background-color:{SMC_NAVY};padding:10px;border-radius:6px;'>
+<h3 style='color:white;text-align:center;margin:0;'>Step 2 — Send CSV by Email</h3>
+</div>
+""", unsafe_allow_html=True)
+
+col1, col2 = st.columns(2)
+with col1:
+    sender_email = st.text_input("Your email address (From)")
+with col2:
+    recipient_email = st.text_input("Recipient email address (To)")
+
+note_text = st.text_area("Add a short note", placeholder="e.g., Lunch prep log — 10/22")
+
+if st.button("📤 Send Aggregated CSV Now", use_container_width=True):
+    if "df" not in locals() or df.empty:
+        st.error("No CSV data available. Please upload a valid image first.")
+    elif not sender_email or not recipient_email:
+        st.error("Please enter both sender and recipient email addresses.")
+    else:
+        # Simulate sending email (no password required)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+            df.to_csv(tmp.name, index=False)
+            tmp_path = tmp.name
+
+        st.success(f"✅ CSV ready to be sent from {sender_email} to {recipient_email}")
+        st.info("Email sending currently disabled for security — CSV can be sent manually.")
+
+st.markdown("<br><hr>", unsafe_allow_html=True)
+st.caption("Saint Mary’s College Dining Data Project · Developed by Jonathan White")
