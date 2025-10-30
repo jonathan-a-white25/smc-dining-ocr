@@ -5,3 +5,5 @@ opencv-python-headless
 pandas
 PyYAML
 requests
+google-cloud-vision
+# Trigger Streamlit rebuild
