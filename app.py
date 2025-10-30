@@ -53,7 +53,7 @@ st.markdown(
     f"""
     <div style="background-color:{SMC_NAVY};padding:15px 25px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;">
         <div>
-            <h1 style="color:white;margin-bottom:4px;">📋 SMC Dining OCR</h1>
+            <h1 style="color:white;margin-bottom:4px;"> SMC Dining OCR</h1>
             <p style="color:white;margin-top:0;font-size:16px;">Built by Group 1 · Powered by Google Cloud Vision API</p>
         </div>
             <img src="data:image/png;base64,{logo_data}" width="80" style="border-radius:6px;margin-left:10px;">
@@ -151,13 +151,13 @@ st.markdown(f"""
 uploaded_file = st.file_uploader("Upload image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
-    with st.spinner("🔍 Reading image... please wait"):
+    with st.spinner("Reading image... please wait"):
         text_output = extract_text_from_image(uploaded_file)
 
-    st.subheader("🧾 OCR Text Preview")
+    st.subheader("OCR Text Preview")
     st.text_area("Detected Text", text_output, height=200)
 
-    st.subheader("📊 Parsed & Aggregated Table")
+    st.subheader(" Parested & Aggregated Table")
     df = parse_ocr_text(text_output)
     st.dataframe(df, use_container_width=True)
 
