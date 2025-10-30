@@ -1,5 +1,5 @@
 # --------------------------------------------------------
-# SMC Dining OCR — Branded Version
+# SMC Dining OCR — Streamlit + Google Vision
 # Author: Jonathan White
 # Date: October 2025
 # --------------------------------------------------------
@@ -10,12 +10,14 @@ import re
 import io
 import smtplib
 import tempfile
+import json
+from pathlib import Path
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 from google.cloud import vision
-from pathlib import Path
+from google.oauth2 import service_account
 
 # --------------------------------------------------------
 # PAGE CONFIGURATION
@@ -25,9 +27,8 @@ st.set_page_config(page_title="SMC Dining OCR", layout="wide")
 # SMC Brand Colors
 SMC_NAVY = "#002855"
 SMC_RED = "#C8102E"
-LIGHT_GRAY = "#F7F7F7"
 
-# Load CSS theme (optional)
+# Load optional custom CSS theme
 css_path = Path("assets/theme.css")
 if css_path.exists():
     with open(css_path) as f:
@@ -36,7 +37,9 @@ if css_path.exists():
 # Path to logo
 logo_path = "assets/smc_g_logo.png"
 
-# Top Banner with Logo
+# --------------------------------------------------------
+# TOP BANNER
+# --------------------------------------------------------
 st.markdown(
     f"""
     <div style="background-color:{SMC_NAVY};padding:15px 25px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;">
@@ -54,18 +57,26 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 st.write("""
 Upload a photo of your handwritten prep log.  
-The system reads entries using **Google Cloud Vision API**, cleans the text,
-groups “like” items together (e.g., all broccoli summed on one line),  
-and allows you to email or download the aggregated CSV report.
+The system reads entries using **Google Cloud Vision API**, cleans and groups “like” items
+(e.g., all broccoli summed together), and allows you to **download or email** the aggregated CSV report.
 """)
 
 # --------------------------------------------------------
-# OCR FUNCTION
+# OCR FUNCTION (works locally or in Streamlit Cloud)
 # --------------------------------------------------------
 def extract_text_from_image(uploaded_image):
-    client = vision.ImageAnnotatorClient.from_service_account_json("vision_key.json")
+    try:
+        # Try loading credentials from Streamlit Secrets (cloud)
+        key_dict = json.loads(st.secrets["google_cloud"]["vision_key"])
+        credentials = service_account.Credentials.from_service_account_info(key_dict)
+        client = vision.ImageAnnotatorClient(credentials=credentials)
+    except Exception:
+        # Fallback for local testing
+        client = vision.ImageAnnotatorClient.from_service_account_json("vision_key.json")
+
     content = uploaded_image.read()
     image = vision.Image(content=content)
+
     response = client.text_detection(image=image)
     texts = response.text_annotations
 
@@ -93,7 +104,7 @@ def parse_ocr_text(text):
     df["Item"] = df["Item"].str.strip().str.title()
     df["Quantity"] = df["Quantity"].astype(float)
 
-    # Handle merged items like "Teriyaki Chicken Rice"
+    # Detect merged items like "Teriyaki Chicken Rice"
     menu_items = ["Roasted Broccoli", "Teriyaki Chicken", "Rice"]
     fixed_rows = []
 
@@ -157,7 +168,7 @@ else:
     st.info("Please upload an image to begin.")
 
 # --------------------------------------------------------
-# EMAIL SECTION (no password)
+# EMAIL SECTION (no password required)
 # --------------------------------------------------------
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown(f"""
@@ -180,7 +191,6 @@ if st.button("📤 Send Aggregated CSV Now", use_container_width=True):
     elif not sender_email or not recipient_email:
         st.error("Please enter both sender and recipient email addresses.")
     else:
-        # Simulate sending email (no password required)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
             df.to_csv(tmp.name, index=False)
             tmp_path = tmp.name
