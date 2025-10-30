@@ -157,7 +157,7 @@ if uploaded_file is not None:
     st.subheader("OCR Text Preview")
     st.text_area("Detected Text", text_output, height=200)
 
-    st.subheader(" Parested & Aggregated Table")
+    st.subheader(" Parsed & Aggregated Table")
     df = parse_ocr_text(text_output)
     st.dataframe(df, use_container_width=True)
 
