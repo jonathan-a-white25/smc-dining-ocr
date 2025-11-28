@@ -58,7 +58,22 @@ def _send_via_smtp(sender, recipient, subject, body_text, attachment_bytes, atta
         server.sendmail(sender, recipient, msg.as_string())
     return True, "Sent"
 
+from datetime import datetime
+
 def send_email_with_attachment(sender, recipient, subject, body_text, attachment_bytes, attachment_name):
+    # Add timestamp to avoid CSV(1), CSV(2), etc.
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    
+    # Inject timestamp into filename BEFORE sending
+    name_with_timestamp = f"{timestamp}_{attachment_name}"
+
     if os.getenv("SENDGRID_API_KEY"):
-        return _send_via_sendgrid(sender, recipient, subject, body_text, attachment_bytes, attachment_name)
-    return _send_via_smtp(sender, recipient, subject, body_text, attachment_name)
+        return _send_via_sendgrid(
+            sender, recipient, subject, body_text,
+            attachment_bytes, name_with_timestamp
+        )
+
+    return _send_via_smtp(
+        sender, recipient, subject, body_text,
+        attachment_bytes, name_with_timestamp
+    )
