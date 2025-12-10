@@ -126,46 +126,69 @@ def detect_station_name(text: str) -> str:
 
 
 # --------------------------------------------------------
-# PARSE FUNCTION (aggregate like-data, fuzzy grouping)
+# PARSE FUNCTION (line-based, fuzzy aggregation)
 # --------------------------------------------------------
 def parse_ocr_text(text: str):
     """
     Cleans OCR text and aggregates quantities of similar menu items.
 
-    - Detects the station name from the full OCR text.
-    - Normalizes weight formats (10#, 10 lbs, 10 pounds → 10 lbs).
-    - Extracts rows with Date, Time, Item, Quantity.
+    - Detects station name from full OCR text.
+    - Extracts Date from header line like: "Date 12/10/2025".
+    - Parses lines that look like "Roasted Broccoli 8 lbs" or "Rice 5#".
+    - Normalizes weight units so '#', 'lbs', and 'pounds' are treated the same.
     - Uses fuzzy grouping so similar item names aggregate together.
     - Returns: (aggregated_df, station)
     """
-    # Detect station from the raw OCR text
+    # -------- Station + Date detection --------
     station = detect_station_name(text)
 
-    # Normalize whitespace
-    cleaned = re.sub(r"\s+", " ", text.strip())
+    # Try to pull the date from a header like "Date 12/10/2025"
+    date_match = re.search(r"Date\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, re.IGNORECASE)
+    header_date = date_match.group(1) if date_match else ""
 
-    # Normalize all weight notations to 'lbs'
-    # Handles: '10#', '10 #', '10 lb', '10lbs', '10 LB', '10 pounds', '10 pound'
-    cleaned = re.sub(r"(\d+)\s*#", r"\1 lbs", cleaned)  # kitchen shorthand '#'
-    cleaned = re.sub(
+    # -------- Normalize weight units in the whole text --------
+    # Convert things like "10#", "10 #", "10 lb", "10lbs", "10 pounds" -> "10 lbs"
+    cleaned_text = re.sub(r"(\d+)\s*#", r"\1 lbs", text)
+    cleaned_text = re.sub(
         r"(\d+)\s*(?:pounds?|pound|lbs?|lb)\b\.?",
         r"\1 lbs",
-        cleaned,
+        cleaned_text,
         flags=re.IGNORECASE,
     )
 
-    # Keep original custom normalizations if they help with noisy OCR
-    cleaned = re.sub(r"(\d+)\s?1?65\.?", r"\1 lbs", cleaned)
-    cleaned = re.sub(r"(\d+)\s?lb[sS]?", r"\1 lbs", cleaned)
+    # Optional: keep legacy strange normalization in case OCR merges "165"
+    cleaned_text = re.sub(r"(\d+)\s?1?65\.?", r"\1 lbs", cleaned_text)
+    cleaned_text = re.sub(r"(\d+)\s?lb[sS]?", r"\1 lbs", cleaned_text)
 
-    # Pattern: Date, Time, Item, Quantity (numeric) before 'lbs'
-    pattern = (
-        r"(\d{1,2}/\d{1,2})\s+"        # Date (e.g., 10/15)
-        r"([\d:]{4,5})\s+"             # Time (e.g., 7:30, 12:00)
-        r"([A-Za-z\s]+?)\s+"           # Item (lazy match)
-        r"(\d+(?:\.\d+)?)\s*lbs\.?"    # Quantity number followed by 'lbs'
-    )
-    rows = re.findall(pattern, cleaned, re.IGNORECASE)
+    # -------- Parse line by line --------
+    rows = []
+    for raw_line in cleaned_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Skip obvious header lines
+        if re.match(r"^(Station|Time|Item|Date|Quantity)\b", line, re.IGNORECASE):
+            continue
+
+        # Collapse multiple spaces inside the line
+        line = re.sub(r"\s+", " ", line)
+
+        # Look for "Item  <number> lbs" in the line
+        # Item is letters/spaces (optionally with periods), then a number, then 'lbs'
+        m = re.search(
+            r"([A-Za-z][A-Za-z\s\.]+?)\s+(\d+(?:\.\d+)?)\s*lbs\.?",
+            line,
+            re.IGNORECASE,
+        )
+        if m:
+            item_text = m.group(1)
+            qty = float(m.group(2))
+
+            # Clean item punctuation and spacing
+            item_text = item_text.replace(".", " ").strip()
+            item_text = re.sub(r"\s+", " ", item_text)
+            rows.append((header_date, item_text, qty))
 
     if not rows:
         empty_df = pd.DataFrame(
@@ -173,37 +196,30 @@ def parse_ocr_text(text: str):
         )
         return empty_df, station
 
-    df = pd.DataFrame(rows, columns=["Date", "Time", "Item", "Quantity"])
+    df = pd.DataFrame(rows, columns=["Date", "Item", "Quantity"])
 
     # Basic cleaning
     df["Item"] = df["Item"].str.strip().str.title()
     df["Quantity"] = df["Quantity"].astype(float)
 
-    # --------------------------------------------------------
-    # Fuzzy grouping of similar item names
-    # --------------------------------------------------------
+    # -------- Fuzzy grouping of similar item names --------
     unique_items = sorted(df["Item"].unique())
     canonicals = []
     mapping = {}
-    cutoff = 0.87  # similarity threshold for grouping similar items
+    cutoff = 0.87  # similarity threshold
 
     for item in unique_items:
         if not canonicals:
-            # First item becomes its own canonical form
             canonicals.append(item)
             mapping[item] = item
         else:
-            # Find the closest existing canonical name
             match = difflib.get_close_matches(item, canonicals, n=1, cutoff=cutoff)
             if match:
-                # Map this item to the existing canonical name
                 mapping[item] = match[0]
             else:
-                # Start a new canonical group
                 canonicals.append(item)
                 mapping[item] = item
 
-    # Apply the canonical mapping
     df["Canonical Item"] = df["Item"].map(mapping)
 
     # Aggregate by Date + Canonical Item
