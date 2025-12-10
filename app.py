@@ -126,29 +126,43 @@ def detect_station_name(text: str) -> str:
 
 
 # --------------------------------------------------------
-# PARSE FUNCTION (line-based, fuzzy aggregation)
+# PARSE FUNCTION (robust OCR cleanup + fuzzy aggregation)
 # --------------------------------------------------------
 def parse_ocr_text(text: str):
     """
-    Cleans OCR text and aggregates quantities of similar menu items.
+    Robust OCR text parser for dining logs.
 
     - Detects station name from full OCR text.
     - Extracts Date from header line like: "Date 12/10/2025".
-    - Parses lines that look like "Roasted Broccoli 8 lbs" or "Rice 5#".
+    - Fixes OCR errors where 'lbs' is misread (e.g., 165, 1bs, i65).
+    - Parses both one-line and two-line item/quantity formats:
+        "Roasted Broccoli 8 lbs"
+        "Rice" / "5#"
     - Normalizes weight units so '#', 'lbs', and 'pounds' are treated the same.
-    - Uses fuzzy grouping so similar item names aggregate together.
+    - Uses fuzzy grouping (cutoff 0.87) so similar item names aggregate together.
     - Returns: (aggregated_df, station)
     """
+
     # -------- Station + Date detection --------
     station = detect_station_name(text)
-
-    # Try to pull the date from a header like "Date 12/10/2025"
     date_match = re.search(r"Date\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, re.IGNORECASE)
     header_date = date_match.group(1) if date_match else ""
 
-    # -------- Normalize weight units in the whole text --------
-    # Convert things like "10#", "10 #", "10 lb", "10lbs", "10 pounds" -> "10 lbs"
-    cleaned_text = re.sub(r"(\d+)\s*#", r"\1 lbs", text)
+    # -------- PRE-CLEAN OCR NOISE FOR "LBS" --------
+    cleaned_text = text
+
+    # Common Vision misreads of "lbs"
+    cleaned_text = re.sub(r"1[bB][sS]?", "lbs", cleaned_text)
+    cleaned_text = re.sub(r"l[bB][sS]?", "lbs", cleaned_text)
+    cleaned_text = re.sub(r"[iI]65", "lbs", cleaned_text)
+    cleaned_text = re.sub(r"l6[5s]", "lbs", cleaned_text)
+
+    # Numbers glued to "165" or similar: '8165' -> '8 lbs', '10165' -> '10 lbs'
+    cleaned_text = re.sub(r"(\d+)\s*1?65\b", r"\1 lbs", cleaned_text)
+    cleaned_text = re.sub(r"(\d+)\s*[lI]bs?\b", r"\1 lbs", cleaned_text)
+
+    # Normalize pound symbols and textual variants
+    cleaned_text = re.sub(r"(\d+)\s*#", r"\1 lbs", cleaned_text)
     cleaned_text = re.sub(
         r"(\d+)\s*(?:pounds?|pound|lbs?|lb)\b\.?",
         r"\1 lbs",
@@ -156,40 +170,54 @@ def parse_ocr_text(text: str):
         flags=re.IGNORECASE,
     )
 
-    # Optional: keep legacy strange normalization in case OCR merges "165"
-    cleaned_text = re.sub(r"(\d+)\s?1?65\.?", r"\1 lbs", cleaned_text)
-    cleaned_text = re.sub(r"(\d+)\s?lb[sS]?", r"\1 lbs", cleaned_text)
-
     # -------- Parse line by line --------
+    lines = [ln.strip() for ln in cleaned_text.splitlines() if ln.strip()]
     rows = []
-    for raw_line in cleaned_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
 
         # Skip obvious header lines
         if re.match(r"^(Station|Time|Item|Date|Quantity)\b", line, re.IGNORECASE):
+            i += 1
             continue
 
-        # Collapse multiple spaces inside the line
+        # Collapse internal spaces
         line = re.sub(r"\s+", " ", line)
 
-        # Look for "Item  <number> lbs" in the line
-        # Item is letters/spaces (optionally with periods), then a number, then 'lbs'
-        m = re.search(
-            r"([A-Za-z][A-Za-z\s\.]+?)\s+(\d+(?:\.\d+)?)\s*lbs\.?",
+        # Case 1: item and quantity on the same line
+        match_inline = re.search(
+            r"([A-Za-z][A-Za-z\s\.]+?)\s+(\d+(?:\.\d+)?)\s*lbs",
             line,
             re.IGNORECASE,
         )
-        if m:
-            item_text = m.group(1)
-            qty = float(m.group(2))
+        if match_inline:
+            item = match_inline.group(1).replace(".", " ").strip()
+            qty = float(match_inline.group(2))
+            rows.append((header_date, item, qty))
+            i += 1
+            continue
 
-            # Clean item punctuation and spacing
-            item_text = item_text.replace(".", " ").strip()
-            item_text = re.sub(r"\s+", " ", item_text)
-            rows.append((header_date, item_text, qty))
+        # Case 2: item on this line, quantity on the next line
+        if i + 1 < len(lines):
+            next_line = re.sub(r"\s+", " ", lines[i + 1])
+            match_next = re.search(
+                r"(\d+(?:\.\d+)?)\s*lbs",
+                next_line,
+                re.IGNORECASE,
+            )
+            if match_next:
+                item = line.replace(".", " ").strip()
+                qty = float(match_next.group(1))
+                rows.append((header_date, item, qty))
+                i += 2
+                continue
 
+        # No usable pattern on this line; move on
+        i += 1
+
+    # -------- Build DataFrame --------
     if not rows:
         empty_df = pd.DataFrame(
             columns=["Station", "Date", "Item", "Total Quantity (lbs)"]
@@ -197,16 +225,14 @@ def parse_ocr_text(text: str):
         return empty_df, station
 
     df = pd.DataFrame(rows, columns=["Date", "Item", "Quantity"])
-
-    # Basic cleaning
-    df["Item"] = df["Item"].str.strip().str.title()
+    df["Item"] = df["Item"].str.title().str.strip()
     df["Quantity"] = df["Quantity"].astype(float)
 
     # -------- Fuzzy grouping of similar item names --------
     unique_items = sorted(df["Item"].unique())
     canonicals = []
     mapping = {}
-    cutoff = 0.87  # similarity threshold
+    cutoff = 0.87
 
     for item in unique_items:
         if not canonicals:
@@ -222,7 +248,6 @@ def parse_ocr_text(text: str):
 
     df["Canonical Item"] = df["Item"].map(mapping)
 
-    # Aggregate by Date + Canonical Item
     aggregated = (
         df.groupby(["Date", "Canonical Item"], as_index=False)["Quantity"]
         .sum()
@@ -230,8 +255,6 @@ def parse_ocr_text(text: str):
     )
 
     aggregated["Total Quantity (lbs)"] = aggregated["Total Quantity (lbs)"].round(1)
-
-    # Attach Station column and reorder
     aggregated["Station"] = station
     aggregated = aggregated[["Station", "Date", "Item", "Total Quantity (lbs)"]]
 
