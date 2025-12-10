@@ -130,14 +130,15 @@ def detect_station_name(text: str) -> str:
 # --------------------------------------------------------
 def parse_ocr_text(text: str):
     """
-    OCR text parser for dining logs using a simple pairing strategy.
+    OCR text parser for dining logs with debug output.
 
     - Detects station name and date.
-    - Normalizes '#', 'lb', 'lbs', 'pounds' to 'lbs'.
-    - Treats lines with only letters as items.
-    - Treats lines with digits + 'lbs' as quantities.
-    - Also supports inline 'Item 10 lbs' lines.
-    - Pairs items and quantities in order, then aggregates with fuzzy matching.
+    - Normalizes '#', 'lb', 'lbs', 'pounds' to 'lbs' (but does NOT touch plain numbers like 8165).
+    - Supports:
+        * Inline:  "Roasted Broccoli 8 lbs"
+        * Two-line: "Roasted Broccoli" / "8 lbs"
+    - Uses a simple state machine with explicit line classification.
+    - Returns: aggregated_df, station, debug_df
     """
 
     # -------- Station + Date detection --------
@@ -145,14 +146,14 @@ def parse_ocr_text(text: str):
     date_match = re.search(r"Date\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, re.IGNORECASE)
     header_date = date_match.group(1) if date_match else ""
 
-    # -------- Normalize units, but DO NOT touch plain numbers --------
+    # -------- Normalize units (but DO NOT touch plain numbers) --------
     cleaned_text = text
 
-    # Fix obvious misreads like '1bs', 'lbs.', 'lb.'
+    # Fix obvious 'lbs' variants like '1bs', 'lbs.' or 'lb.'
     cleaned_text = re.sub(r"1[bB][sS]\.?", "lbs", cleaned_text)
     cleaned_text = re.sub(r"l[bB][sS]\.?", "lbs", cleaned_text)
 
-    # Convert '#', 'pounds', etc. to 'lbs'
+    # Convert '#', 'lb', 'lbs', 'pounds' → 'lbs'
     cleaned_text = re.sub(r"(\d+)\s*#", r"\1 lbs", cleaned_text)
     cleaned_text = re.sub(
         r"(\d+)\s*(?:pounds?|pound|lbs?|lb)\b\.?",
@@ -161,82 +162,107 @@ def parse_ocr_text(text: str):
         flags=re.IGNORECASE,
     )
 
-    # Split into non-empty lines
-    lines = [ln.strip() for ln in cleaned_text.splitlines() if ln.strip()]
+    # Raw & cleaned line lists for debugging
+    raw_lines = [ln.rstrip("\n") for ln in text.splitlines()]
+    cleaned_lines = [ln.rstrip("\n") for ln in cleaned_text.splitlines()]
 
-    inline_rows = []      # (date, item, qty) where item+qty are on same line
-    item_lines = []       # item-only lines (letters, no digits)
-    qty_values = []       # numeric quantities from pure '10 lbs' lines
+    # We'll classify only non-empty cleaned lines
+    nonempty_indices = [
+        i for i, ln in enumerate(cleaned_lines) if ln.strip()
+    ]
 
-    # -------- First pass: classify lines --------
-    for raw_line in lines:
-        line = raw_line.strip()
+    # Pre-compiled patterns
+    inline_pattern = re.compile(
+        r"^([A-Za-z][A-Za-z\s\./,&-]+?)\s+(\d+(?:\.\d+)?)\s*lbs\b",
+        re.IGNORECASE,
+    )
+    qty_pattern = re.compile(
+        r"^(\d+(?:\.\d+)?)\s*lbs\b",
+        re.IGNORECASE,
+    )
+    header_pattern = re.compile(
+        r"^(Station|Time|Item|Date|Quantity)\b",
+        re.IGNORECASE,
+    )
 
-        # Skip headers
-        if re.match(r"^(Station|Time|Item|Date|Quantity)\b", line, re.IGNORECASE):
-            continue
+    debug_rows = []
+    rows = []
+    current_item = None  # last item we saw
 
-        # Collapse internal spaces
-        line = re.sub(r"\s+", " ", line)
+    for idx in nonempty_indices:
+        raw_line = raw_lines[idx]
+        cline = cleaned_lines[idx].strip()
+        cline = re.sub(r"\s+", " ", cline)
 
-        has_letters = bool(re.search(r"[A-Za-z]", line))
-        has_digits = bool(re.search(r"\d", line))
-        has_lbs = bool(re.search(r"\blbs\b", line, re.IGNORECASE))
+        classification = "ignored"
+        item_candidate = ""
+        qty_candidate = ""
 
-        # Case 1: inline "Item 10 lbs"
-        if has_letters and has_digits and has_lbs:
-            m = re.search(
-                r"([A-Za-z][A-Za-z\s\.]+?)\s+(\d+(?:\.\d+)?)\s*lbs",
-                line,
-                re.IGNORECASE,
-            )
-            if m:
-                item_text = m.group(1)
-                qty_str = m.group(2)
-                try:
-                    qty = float(qty_str)
-                except ValueError:
-                    continue
+        # Header?
+        if header_pattern.match(cline):
+            classification = "header"
 
-                item = item_text.replace(".", " ").strip()
+        else:
+            # 1) Inline "Item 10 lbs"
+            m_inline = inline_pattern.match(cline)
+            if m_inline:
+                classification = "inline"
+                item_candidate = m_inline.group(1)
+                qty_candidate = m_inline.group(2)
+
+                item = item_candidate.replace(".", " ").strip()
                 item = re.sub(r"\s+", " ", item)
-                inline_rows.append((header_date, item, qty))
-            continue
-
-        # Case 2: item-only line (letters, no digits)
-        if has_letters and not has_digits:
-            item = line.replace(".", " ").strip()
-            item = re.sub(r"\s+", " ", item)
-            item_lines.append(item)
-            continue
-
-        # Case 3: pure quantity line (digits + 'lbs', no letters)
-        if has_digits and has_lbs and not has_letters:
-            m = re.search(r"(\d+(?:\.\d+)?)\s*lbs", line, re.IGNORECASE)
-            if m:
-                qty_str = m.group(1)
                 try:
-                    qty = float(qty_str)
+                    qty = float(qty_candidate)
+                    rows.append((header_date, item, qty))
+                    current_item = item
                 except ValueError:
-                    continue
-                qty_values.append(qty)
-            continue
+                    pass
 
-        # Anything else (plain numbers like '8165', junk) -> ignore
+            else:
+                # 2) Pure quantity "10 lbs"
+                m_qty = qty_pattern.match(cline)
+                if m_qty:
+                    classification = "qty_only"
+                    qty_candidate = m_qty.group(1)
 
-    # -------- Pair separate item and quantity lists in order --------
-    rows = list(inline_rows)  # start with inline rows
+                    if current_item is not None:
+                        try:
+                            qty = float(qty_candidate)
+                            rows.append((header_date, current_item, qty))
+                        except ValueError:
+                            pass
 
-    pair_count = min(len(item_lines), len(qty_values))
-    for idx in range(pair_count):
-        rows.append((header_date, item_lines[idx], qty_values[idx]))
+                else:
+                    # 3) Item-only line (letters, no digits)
+                    has_letters = bool(re.search(r"[A-Za-z]", cline))
+                    has_digits = bool(re.search(r"\d", cline))
+                    if has_letters and not has_digits:
+                        classification = "item_only"
+                        item_candidate = cline
+                        item = cline.replace(".", " ").strip()
+                        item = re.sub(r"\s+", " ", item)
+                        current_item = item
+
+        debug_rows.append(
+            {
+                "idx": idx,
+                "raw_line": raw_line,
+                "cleaned_line": cline,
+                "classification": classification,
+                "item_candidate": item_candidate,
+                "qty_candidate": qty_candidate,
+                "current_item_after_line": current_item,
+            }
+        )
 
     # -------- Build DataFrame --------
     if not rows:
+        debug_df = pd.DataFrame(debug_rows)
         empty_df = pd.DataFrame(
             columns=["Station", "Date", "Item", "Total Quantity (lbs)"]
         )
-        return empty_df, station
+        return empty_df, station, debug_df
 
     df = pd.DataFrame(rows, columns=["Date", "Item", "Quantity"])
 
@@ -281,7 +307,8 @@ def parse_ocr_text(text: str):
     aggregated["Station"] = station
     aggregated = aggregated[["Station", "Date", "Item", "Total Quantity (lbs)"]]
 
-    return aggregated, station
+    debug_df = pd.DataFrame(debug_rows)
+    return aggregated, station, debug_df
 
 # --------------------------------------------------------
 # FILE UPLOAD SECTION
