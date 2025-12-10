@@ -338,7 +338,8 @@ if uploaded_file is not None:
 
     # Parse + aggregate + detect station
     st.subheader("Parsed & Aggregated Table")
-    df, detected_station = parse_ocr_text(text_output)
+    df, detected_station, debug_df = parse_ocr_text(text_output)
+
 
     # Show detected station
     if detected_station and detected_station != "Unknown":
@@ -349,6 +350,11 @@ if uploaded_file is not None:
         )
 
     st.dataframe(df, use_container_width=True)
+
+     # --- Temporary debug view ---
+    with st.expander("Debug: OCR line parsing (temporary)"):
+        st.write("Each OCR line and how the parser classified it:")
+        st.dataframe(debug_df, use_container_width=True)
 
     if not df.empty:
         csv_bytes = df.to_csv(index=False).encode("utf-8")
