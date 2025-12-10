@@ -295,22 +295,41 @@ def parse_ocr_text(text: str):
     df["Quantity"] = df["Quantity"].astype(float)
 
     # -------- Fuzzy grouping (merge misspellings) --------
-    unique_items = sorted(df["Item"].unique())
-    canonicals = []
-    mapping = {}
-    cutoff = 0.87
+    # Preserve first-seen order instead of sorting
+unique_items = list(dict.fromkeys(df["Item"].tolist()))
+canonicals = []
+mapping = {}
+cutoff = 0.87
 
-    for item in unique_items:
-        if not canonicals:
-            canonicals.append(item)
-            mapping[item] = item
-        else:
-            match = difflib.get_close_matches(item, canonicals, n=1, cutoff=cutoff)
-            if match:
-                mapping[item] = match[0]
-            else:
-                canonicals.append(item)
-                mapping[item] = item
+for item in unique_items:
+    if not canonicals:
+        canonicals.append(item)
+        mapping[item] = item
+        continue
+
+    # 1) Try strong character-level match first
+    match = difflib.get_close_matches(item, canonicals, n=1, cutoff=cutoff)
+
+    if match:
+        mapping[item] = match[0]
+        continue
+
+    # 2) Fallback: word-level overlap (e.g., "Broccoli" vs "Raasted Broccoli")
+    tokens = set(item.split())
+    best_canon = None
+    best_overlap = 0
+
+    for c in canonicals:
+        overlap = len(tokens & set(c.split()))
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_canon = c
+
+    if best_canon and best_overlap > 0:
+        mapping[item] = best_canon
+    else:
+        canonicals.append(item)
+        mapping[item] = item
 
     df["Canonical Item"] = df["Item"].map(mapping)
 
