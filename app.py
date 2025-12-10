@@ -130,14 +130,15 @@ def detect_station_name(text: str) -> str:
 # --------------------------------------------------------
 def parse_ocr_text(text: str):
     """
-    OCR text parser for dining logs with debug output.
+    OCR text parser for dining logs with debug output and an item queue.
 
     - Detects station name and date.
     - Normalizes '#', 'lb', 'lbs', 'pounds' to 'lbs' (but does NOT touch plain numbers like 8165).
     - Supports:
         * Inline:  "Roasted Broccoli 8 lbs"
-        * Two-line: "Roasted Broccoli" / "8 lbs"
-    - Uses a simple state machine with explicit line classification.
+        * Multi-item block: several item lines, then several qty lines.
+        * Two-line: "Rice" / "5 lbs"
+    - Keeps a FIFO queue of pending items so quantities pair in order.
     - Returns: aggregated_df, station, debug_df
     """
 
@@ -167,9 +168,7 @@ def parse_ocr_text(text: str):
     cleaned_lines = [ln.rstrip("\n") for ln in cleaned_text.splitlines()]
 
     # We'll classify only non-empty cleaned lines
-    nonempty_indices = [
-        i for i, ln in enumerate(cleaned_lines) if ln.strip()
-    ]
+    nonempty_indices = [i for i, ln in enumerate(cleaned_lines) if ln.strip()]
 
     # Pre-compiled patterns
     inline_pattern = re.compile(
@@ -187,7 +186,9 @@ def parse_ocr_text(text: str):
 
     debug_rows = []
     rows = []
-    current_item = None  # last item we saw
+
+    pending_items = []   # FIFO queue of items waiting for a quantity
+    last_item = None     # most recent item we saw (for fallback)
 
     for idx in nonempty_indices:
         raw_line = raw_lines[idx]
@@ -197,6 +198,7 @@ def parse_ocr_text(text: str):
         classification = "ignored"
         item_candidate = ""
         qty_candidate = ""
+        last_item_after = last_item
 
         # Header?
         if header_pattern.match(cline):
@@ -215,7 +217,8 @@ def parse_ocr_text(text: str):
                 try:
                     qty = float(qty_candidate)
                     rows.append((header_date, item, qty))
-                    current_item = item
+                    last_item = item
+                    last_item_after = last_item
                 except ValueError:
                     pass
 
@@ -226,12 +229,23 @@ def parse_ocr_text(text: str):
                     classification = "qty_only"
                     qty_candidate = m_qty.group(1)
 
-                    if current_item is not None:
-                        try:
-                            qty = float(qty_candidate)
-                            rows.append((header_date, current_item, qty))
-                        except ValueError:
-                            pass
+                    try:
+                        qty = float(qty_candidate)
+                    except ValueError:
+                        qty = None
+
+                    if qty is not None:
+                        if pending_items:
+                            # Use the oldest pending item (FIFO)
+                            item = pending_items.pop(0)
+                        else:
+                            # Fallback: use the last seen item
+                            item = last_item
+
+                        if item is not None:
+                            rows.append((header_date, item, qty))
+                            last_item = item
+                            last_item_after = last_item
 
                 else:
                     # 3) Item-only line (letters, no digits)
@@ -242,7 +256,9 @@ def parse_ocr_text(text: str):
                         item_candidate = cline
                         item = cline.replace(".", " ").strip()
                         item = re.sub(r"\s+", " ", item)
-                        current_item = item
+                        pending_items.append(item)
+                        last_item = item
+                        last_item_after = last_item
 
         debug_rows.append(
             {
@@ -252,7 +268,8 @@ def parse_ocr_text(text: str):
                 "classification": classification,
                 "item_candidate": item_candidate,
                 "qty_candidate": qty_candidate,
-                "current_item_after_line": current_item,
+                "pending_items_after_line": list(pending_items),
+                "last_item_after_line": last_item_after,
             }
         )
 
