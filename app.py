@@ -132,15 +132,11 @@ def parse_ocr_text(text: str):
     """
     Robust OCR text parser for dining logs.
 
-    - Detects station name from full OCR text.
-    - Extracts Date from header line like: "Date 12/10/2025".
-    - Fixes OCR errors where 'lbs' is misread (e.g., 165, 1bs, i65).
-    - Parses both one-line and two-line item/quantity formats:
-        "Roasted Broccoli 8 lbs"
-        "Rice" / "5#"
-    - Normalizes weight units so '#', 'lbs', and 'pounds' are treated the same.
-    - Uses fuzzy grouping (cutoff 0.87) so similar item names aggregate together.
-    - Returns: (aggregated_df, station)
+    - Detects station name and header date.
+    - Fixes OCR errors where 'lbs' is misread (165, 1bs, etc.).
+    - Pairs item lines with following numeric 'lbs' lines.
+    - Prevents numeric-only lines from becoming item names.
+    - Aggregates similar item names with fuzzy matching.
     """
 
     # -------- Station + Date detection --------
@@ -158,7 +154,9 @@ def parse_ocr_text(text: str):
     cleaned_text = re.sub(r"l6[5s]", "lbs", cleaned_text)
 
     # Numbers glued to "165" or similar: '8165' -> '8 lbs', '10165' -> '10 lbs'
-    cleaned_text = re.sub(r"(\d+)\s*1?65\b", r"\1 lbs", cleaned_text)
+    cleaned_text = re.sub(r"(\d{1,2})1?65\b", r"\1 lbs", cleaned_text)
+
+    # Numbers immediately before 'lbs' variants: '10lbs' -> '10 lbs'
     cleaned_text = re.sub(r"(\d+)\s*[lI]bs?\b", r"\1 lbs", cleaned_text)
 
     # Normalize pound symbols and textual variants
@@ -170,52 +168,62 @@ def parse_ocr_text(text: str):
         flags=re.IGNORECASE,
     )
 
-    # -------- Parse line by line --------
+    # -------- Parse line by line with state machine --------
     lines = [ln.strip() for ln in cleaned_text.splitlines() if ln.strip()]
     rows = []
-    i = 0
+    current_item = None  # last seen item line
 
-    while i < len(lines):
-        line = lines[i]
+    for raw_line in lines:
+        line = raw_line.strip()
 
         # Skip obvious header lines
         if re.match(r"^(Station|Time|Item|Date|Quantity)\b", line, re.IGNORECASE):
-            i += 1
             continue
 
         # Collapse internal spaces
         line = re.sub(r"\s+", " ", line)
 
-        # Case 1: item and quantity on the same line
-        match_inline = re.search(
+        # 1) Inline "Item 10 lbs"
+        inline_match = re.search(
             r"([A-Za-z][A-Za-z\s\.]+?)\s+(\d+(?:\.\d+)?)\s*lbs",
             line,
             re.IGNORECASE,
         )
-        if match_inline:
-            item = match_inline.group(1).replace(".", " ").strip()
-            qty = float(match_inline.group(2))
+        if inline_match:
+            item_text = inline_match.group(1)
+            qty = float(inline_match.group(2))
+
+            # Clean the item text
+            item = item_text.replace(".", " ").strip()
+            item = re.sub(r"\s+", " ", item)
+
             rows.append((header_date, item, qty))
-            i += 1
+            current_item = item  # remember in case there are additional numeric-only lines
             continue
 
-        # Case 2: item on this line, quantity on the next line
-        if i + 1 < len(lines):
-            next_line = re.sub(r"\s+", " ", lines[i + 1])
-            match_next = re.search(
-                r"(\d+(?:\.\d+)?)\s*lbs",
-                next_line,
-                re.IGNORECASE,
-            )
-            if match_next:
-                item = line.replace(".", " ").strip()
-                qty = float(match_next.group(1))
-                rows.append((header_date, item, qty))
-                i += 2
-                continue
+        # 2) Pure numeric "10 lbs" line (no letters) -> quantity for current item only
+        if re.match(r"^\d+(?:\.\d+)?\s*lbs\b", line, re.IGNORECASE):
+            if current_item:
+                num_match = re.search(
+                    r"(\d+(?:\.\d+)?)\s*lbs\b", line, re.IGNORECASE
+                )
+                if num_match:
+                    qty = float(num_match.group(1))
+                    rows.append((header_date, current_item, qty))
+            # never treat this as an item; move on
+            continue
 
-        # No usable pattern on this line; move on
-        i += 1
+        # 3) Item-only line (letters, no digits) -> set current item
+        has_letters = bool(re.search(r"[A-Za-z]", line))
+        has_digits = bool(re.search(r"\d", line))
+        if has_letters and not has_digits:
+            item = line.replace(".", " ").strip()
+            item = re.sub(r"\s+", " ", item)
+            current_item = item
+            continue
+
+        # 4) Anything else (weird junk) -> ignore
+        continue
 
     # -------- Build DataFrame --------
     if not rows:
@@ -225,10 +233,19 @@ def parse_ocr_text(text: str):
         return empty_df, station
 
     df = pd.DataFrame(rows, columns=["Date", "Item", "Quantity"])
-    df["Item"] = df["Item"].str.title().str.strip()
+
+    # Clean item names (remove any leftover unit text, normalize casing)
+    df["Item"] = (
+        df["Item"]
+        .str.replace(r"\d+\s*lbs", "", regex=True)
+        .str.replace(r"lbs", "", regex=True)
+        .str.strip()
+        .str.title()
+    )
+
     df["Quantity"] = df["Quantity"].astype(float)
 
-    # -------- Fuzzy grouping of similar item names --------
+    # -------- Fuzzy grouping (to merge Raasted/Roasted etc.) --------
     unique_items = sorted(df["Item"].unique())
     canonicals = []
     mapping = {}
@@ -259,7 +276,6 @@ def parse_ocr_text(text: str):
     aggregated = aggregated[["Station", "Date", "Item", "Total Quantity (lbs)"]]
 
     return aggregated, station
-
 
 # --------------------------------------------------------
 # FILE UPLOAD SECTION
