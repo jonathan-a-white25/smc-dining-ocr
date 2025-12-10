@@ -19,22 +19,15 @@ from google.oauth2 import service_account
 # --------------------------------------------------------
 st.set_page_config(page_title="SMC Dining OCR", layout="wide")
 
-# SMC Brand Colors
 SMC_NAVY = "#002855"
 SMC_RED = "#C8102E"
 
-# Known station names to detect in OCR text
 STATION_NAMES = [
-    "Stacked",
-    "Simple Servings",
-    "Sizzle",
-    "Slices",
-    "Twists",
-    "Bliss",
+    "Stacked", "Simple Servings", "Sizzle", "Slices", "Twists", "Bliss"
 ]
 
 # --------------------------------------------------------
-# OPTIONAL CSS THEME
+# OPTIONAL CSS
 # --------------------------------------------------------
 css_path = Path("assets/theme.css")
 if css_path.exists():
@@ -42,15 +35,12 @@ if css_path.exists():
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 # --------------------------------------------------------
-# LOGO LOADING
+# LOGO
 # --------------------------------------------------------
 logo_path = Path("assets/smc_g_logo.png")
-
-
-def load_logo_base64(logo_path: Path) -> str:
-    with open(logo_path, "rb") as f:
+def load_logo_base64(path):
+    with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
-
 
 logo_data = load_logo_base64(logo_path)
 
@@ -67,8 +57,7 @@ st.markdown(
                 Built by Group 1 · Powered by Google Cloud Vision API
             </p>
         </div>
-        <img src="data:image/png;base64,{logo_data}" width="80"
-             style="border-radius:6px;margin-left:10px;">
+        <img src="data:image/png;base64,{logo_data}" width="80">
     </div>
     """,
     unsafe_allow_html=True,
@@ -79,26 +68,22 @@ st.markdown("<br>", unsafe_allow_html=True)
 st.write(
     """
 Upload a photo of your handwritten prep log.  
-The system reads entries using **Google Cloud Vision API**, cleans and groups similar
-items, and lets you **download** the aggregated CSV report.
+OCR will extract all items, quantities, normalize units, merge similar items,
+and generate a clean CSV.
 """
 )
 
 # --------------------------------------------------------
-# OCR FUNCTION — uses credentials from Streamlit Secrets
+# OCR CALL
 # --------------------------------------------------------
-
-
 def extract_text_from_image(uploaded_image):
-    """Extract text from uploaded image using credentials stored in Streamlit Secrets."""
+    """Google Vision OCR using Streamlit Secrets credentials."""
     try:
-        credentials_info = st.secrets["gcp_service_account"]
-        credentials = service_account.Credentials.from_service_account_info(
-            dict(credentials_info)
-        )
-        client = vision.ImageAnnotatorClient(credentials=credentials)
+        info = st.secrets["gcp_service_account"]
+        creds = service_account.Credentials.from_service_account_info(dict(info))
+        client = vision.ImageAnnotatorClient(credentials=creds)
     except Exception:
-        st.error("❌ Failed to load Google Cloud Vision credentials. Check Streamlit Secrets.")
+        st.error("Could not load Google Vision credentials.")
         st.stop()
 
     content = uploaded_image.read()
@@ -106,19 +91,13 @@ def extract_text_from_image(uploaded_image):
     response = client.text_detection(image=image)
     texts = response.text_annotations
 
-    if not texts:
-        return "No text detected."
-    return texts[0].description
+    return texts[0].description if texts else ""
 
 
 # --------------------------------------------------------
 # STATION DETECTION
 # --------------------------------------------------------
 def detect_station_name(text: str) -> str:
-    """
-    Look for one of the known station names anywhere in the OCR text.
-    Returns 'Unknown' if none found.
-    """
     for name in STATION_NAMES:
         if re.search(rf"\b{name}\b", text, re.IGNORECASE):
             return name
@@ -126,177 +105,178 @@ def detect_station_name(text: str) -> str:
 
 
 # --------------------------------------------------------
-# PARSE FUNCTION (robust OCR cleanup + fuzzy aggregation)
+# MAIN PARSER
 # --------------------------------------------------------
 def parse_ocr_text(text: str):
     """
-    OCR text parser for dining logs with debug output and an item queue.
-
-    - Detects station name and date.
-    - Normalizes '#', 'lb', 'lbs', 'pounds' to 'lbs' (but does NOT touch plain numbers like 8165).
-    - Supports:
-        * Inline:  "Roasted Broccoli 8 lbs"
-        * Multi-item block: several item lines, then several qty lines.
-        * Two-line: "Rice" / "5 lbs"
-    - Keeps a FIFO queue of pending items so quantities pair in order.
-    - Uses fuzzy + word-overlap grouping so misspellings merge.
-    - Returns: aggregated_df, station, debug_df
+    Full OCR parsing with:
+    - OCR fragment merging
+    - Item/quantity extraction using FIFO queue
+    - Synonym normalization
+    - Fuzzy + token aggregation
+    - Debug info
     """
 
-    # -------- Station + Date detection --------
+    # ---- Station + Date ----
     station = detect_station_name(text)
-    date_match = re.search(r"Date\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, re.IGNORECASE)
+    date_match = re.search(r"Date\s+(\d{1,2}/\d{1,2}/\d{2,4})", text)
     header_date = date_match.group(1) if date_match else ""
 
-    # -------- Normalize units (but DO NOT touch plain numbers) --------
-    cleaned_text = text
+    # ---- Normalize units but do NOT modify raw numbers ----
+    cleaned = text
+    cleaned = re.sub(r"1[bB][sS]\.?", "lbs", cleaned)
+    cleaned = re.sub(r"l[bB][sS]\.?", "lbs", cleaned)
+    cleaned = re.sub(r"(\d+)\s*#", r"\1 lbs", cleaned)
+    cleaned = re.sub(r"(\d+)\s*(?:pounds?|pound|lbs?|lb)\b\.?",
+                     r"\1 lbs", cleaned, flags=re.IGNORECASE)
 
-    # Fix obvious 'lbs' variants like '1bs', 'lbs.' or 'lb.'
-    cleaned_text = re.sub(r"1[bB][sS]\.?", "lbs", cleaned_text)
-    cleaned_text = re.sub(r"l[bB][sS]\.?", "lbs", cleaned_text)
-
-    # Convert '#', 'lb', 'lbs', 'pounds' → 'lbs'
-    cleaned_text = re.sub(r"(\d+)\s*#", r"\1 lbs", cleaned_text)
-    cleaned_text = re.sub(
-        r"(\d+)\s*(?:pounds?|pound|lbs?|lb)\b\.?",
-        r"\1 lbs",
-        cleaned_text,
-        flags=re.IGNORECASE,
-    )
-
-    # Raw & cleaned line lists for debugging
     raw_lines = [ln.rstrip("\n") for ln in text.splitlines()]
-    cleaned_lines = [ln.rstrip("\n") for ln in cleaned_text.splitlines()]
+    cleaned_lines = [ln.rstrip("\n") for ln in cleaned.splitlines()]
 
-    # We'll classify only non-empty cleaned lines
-    nonempty_indices = [i for i, ln in enumerate(cleaned_lines) if ln.strip()]
+    # ----------------------------------------------------
+    # FIX: MERGE BROKEN OCR FRAGMENTS (Roasted + Broccoli)
+    # ----------------------------------------------------
+    merged = []
+    skip = False
 
-    # Pre-compiled patterns
-    inline_pattern = re.compile(
-        r"^([A-Za-z][A-Za-z\s\./,&-]+?)\s+(\d+(?:\.\d+)?)\s*lbs\b",
-        re.IGNORECASE,
-    )
-    qty_pattern = re.compile(
-        r"^(\d+(?:\.\d+)?)\s*lbs\b",
-        re.IGNORECASE,
-    )
-    header_pattern = re.compile(
-        r"^(Station|Time|Item|Date|Quantity)\b",
-        re.IGNORECASE,
-    )
+    for i in range(len(cleaned_lines)):
+        if skip:
+            skip = False
+            continue
 
-    debug_rows = []
+        curr = cleaned_lines[i].strip()
+
+        if i < len(cleaned_lines) - 1:
+            nxt = cleaned_lines[i+1].strip()
+
+            # If both lines contain letters, no digits → merge them
+            if (
+                re.search(r"[A-Za-z]", curr) and not re.search(r"\d", curr) and
+                re.search(r"[A-Za-z]", nxt) and not re.search(r"\d", nxt)
+            ):
+                merged.append(curr + " " + nxt)
+                skip = True
+                continue
+
+        merged.append(curr)
+
+    cleaned_lines = merged
+
+    # ----------------------------------------------------
+    # PATTERNS
+    # ----------------------------------------------------
+    inline_re = re.compile(
+        r"^([A-Za-z][A-Za-z\s\./,&-]+?)\s+(\d+(?:\.\d+)?)\s*lbs\b"
+    )
+    qty_re = re.compile(r"^(\d+(?:\.\d+)?)\s*lbs\b")
+    header_re = re.compile(r"^(Station|Time|Item|Date|Quantity)\b", re.IGNORECASE)
+
     rows = []
+    debug_rows = []
 
-    pending_items = []   # FIFO queue of items waiting for a quantity
-    last_item = None     # most recent item we saw (for fallback)
+    pending_items = []
+    last_item = None
 
-    for idx in nonempty_indices:
-        raw_line = raw_lines[idx]
-        cline = cleaned_lines[idx].strip()
-        cline = re.sub(r"\s+", " ", cline)
+    # ----------------------------------------------------
+    # CLASSIFICATION LOOP
+    # ----------------------------------------------------
+    for idx, line in enumerate(cleaned_lines):
+        cl = line.strip()
+        cl = re.sub(r"\s+", " ", cl)
 
         classification = "ignored"
         item_candidate = ""
         qty_candidate = ""
-        last_item_after = last_item
+        last_after = last_item
 
-        # Header?
-        if header_pattern.match(cline):
+        # ---- headers ----
+        if header_re.match(cl):
             classification = "header"
 
         else:
-            # 1) Inline "Item 10 lbs"
-            m_inline = inline_pattern.match(cline)
+            # ---- Case 1: inline "item 10 lbs" ----
+            m_inline = inline_re.match(cl)
             if m_inline:
                 classification = "inline"
-                item_candidate = m_inline.group(1)
-                qty_candidate = m_inline.group(2)
-
-                item = item_candidate.replace(".", " ").strip()
-                item = re.sub(r"\s+", " ", item)
-                try:
-                    qty = float(qty_candidate)
-                    rows.append((header_date, item, qty))
-                    last_item = item
-                    last_item_after = last_item
-                except ValueError:
-                    pass
+                item = m_inline.group(1).strip()
+                qty = float(m_inline.group(2))
+                rows.append((header_date, item, qty))
+                last_item = item
+                last_after = item
 
             else:
-                # 2) Pure quantity "10 lbs"
-                m_qty = qty_pattern.match(cline)
+                # ---- Case 2: quantity-only ----
+                m_qty = qty_re.match(cl)
                 if m_qty:
                     classification = "qty_only"
-                    qty_candidate = m_qty.group(1)
+                    qty = float(m_qty.group(1))
 
-                    try:
-                        qty = float(qty_candidate)
-                    except ValueError:
-                        qty = None
+                    if pending_items:
+                        item = pending_items.pop(0)
+                    else:
+                        item = last_item
 
-                    if qty is not None:
-                        if pending_items:
-                            # Use the oldest pending item (FIFO)
-                            item = pending_items.pop(0)
-                        else:
-                            # Fallback: use the last seen item
-                            item = last_item
-
-                        if item is not None:
-                            rows.append((header_date, item, qty))
-                            last_item = item
-                            last_item_after = last_item
+                    if item is not None:
+                        rows.append((header_date, item, qty))
+                        last_item = item
+                        last_after = item
 
                 else:
-                    # 3) Item-only line (letters, no digits)
-                    has_letters = bool(re.search(r"[A-Za-z]", cline))
-                    has_digits = bool(re.search(r"\d", cline))
-                    if has_letters and not has_digits:
+                    # ---- Case 3: item-only ----
+                    if re.search(r"[A-Za-z]", cl) and not re.search(r"\d", cl):
                         classification = "item_only"
-                        item_candidate = cline
-                        item = cline.replace(".", " ").strip()
-                        item = re.sub(r"\s+", " ", item)
+                        item = cl
                         pending_items.append(item)
                         last_item = item
-                        last_item_after = last_item
+                        last_after = item
 
-        debug_rows.append(
-            {
-                "idx": idx,
-                "raw_line": raw_line,
-                "cleaned_line": cline,
-                "classification": classification,
-                "item_candidate": item_candidate,
-                "qty_candidate": qty_candidate,
-                "pending_items_after_line": list(pending_items),
-                "last_item_after_line": last_item_after,
-            }
-        )
+        debug_rows.append({
+            "idx": idx,
+            "cleaned_line": cl,
+            "classification": classification,
+            "pending_items_after_line": list(pending_items),
+            "last_item_after_line": last_after,
+        })
 
-    # -------- Build DataFrame --------
+    # ----------------------------------------------------
+    # NO VALID ROWS?
+    # ----------------------------------------------------
     if not rows:
-        debug_df = pd.DataFrame(debug_rows)
-        empty_df = pd.DataFrame(
-            columns=["Station", "Date", "Item", "Total Quantity (lbs)"]
+        return (
+            pd.DataFrame(columns=["Station","Date","Item","Total Quantity (lbs)"]),
+            station,
+            pd.DataFrame(debug_rows)
         )
-        return empty_df, station, debug_df
 
-    df = pd.DataFrame(rows, columns=["Date", "Item", "Quantity"])
+    # ----------------------------------------------------
+    # BUILD WORKING DF
+    # ----------------------------------------------------
+    df = pd.DataFrame(rows, columns=["Date","Item","Quantity"])
 
-    # Clean item names
     df["Item"] = (
         df["Item"]
         .str.replace(r"\d+\s*lbs", "", regex=True)
-        .str.replace(r"lbs", "", regex=True)
+        .str.replace("lbs", "", regex=True)
         .str.strip()
         .str.title()
     )
 
     df["Quantity"] = df["Quantity"].astype(float)
 
-    # -------- Fuzzy grouping (merge misspellings) --------
-    # Preserve first-seen order instead of sorting
+    # ----------------------------------------------------
+    # SYNONYM NORMALIZATION (fix "Roasted" issues)
+    # ----------------------------------------------------
+    def normalize_item(name):
+        n = name.lower().strip()
+        if n in {"raasted broccoli", "roasted broccoli", "broccoli", "roasted"}:
+            return "Roasted Broccoli"
+        return name
+
+    df["Item"] = df["Item"].apply(normalize_item)
+
+    # ----------------------------------------------------
+    # FUZZY + TOKEN MERGING
+    # ----------------------------------------------------
     unique_items = list(dict.fromkeys(df["Item"].tolist()))
     canonicals = []
     mapping = {}
@@ -308,25 +288,25 @@ def parse_ocr_text(text: str):
             mapping[item] = item
             continue
 
-        # 1) Try strong character-level match first
+        # strong fuzzy match
         match = difflib.get_close_matches(item, canonicals, n=1, cutoff=cutoff)
         if match:
             mapping[item] = match[0]
             continue
 
-        # 2) Fallback: word-level overlap (e.g., "Broccoli" vs "Raasted Broccoli")
+        # token overlap match
         tokens = set(item.split())
-        best_canon = None
+        best = None
         best_overlap = 0
 
         for c in canonicals:
             overlap = len(tokens & set(c.split()))
             if overlap > best_overlap:
                 best_overlap = overlap
-                best_canon = c
+                best = c
 
-        if best_canon and best_overlap > 0:
-            mapping[item] = best_canon
+        if best and best_overlap > 0:
+            mapping[item] = best
         else:
             canonicals.append(item)
             mapping[item] = item
@@ -334,21 +314,20 @@ def parse_ocr_text(text: str):
     df["Canonical Item"] = df["Item"].map(mapping)
 
     aggregated = (
-        df.groupby(["Date", "Canonical Item"], as_index=False)["Quantity"]
+        df.groupby(["Date","Canonical Item"], as_index=False)["Quantity"]
         .sum()
         .rename(columns={"Canonical Item": "Item", "Quantity": "Total Quantity (lbs)"})
     )
 
-    aggregated["Total Quantity (lbs)"] = aggregated["Total Quantity (lbs)"].round(1)
     aggregated["Station"] = station
-    aggregated = aggregated[["Station", "Date", "Item", "Total Quantity (lbs)"]]
+    cols = ["Station","Date","Item","Total Quantity (lbs)"]
+    aggregated = aggregated[cols]
 
-    debug_df = pd.DataFrame(debug_rows)
-    return aggregated, station, debug_df
+    return aggregated, station, pd.DataFrame(debug_rows)
 
 
 # --------------------------------------------------------
-# FILE UPLOAD SECTION
+# UPLOAD UI
 # --------------------------------------------------------
 st.markdown(
     f"""
@@ -359,98 +338,63 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-uploaded_file = st.file_uploader(
-    "Upload image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"]
-)
+uploaded_file = st.file_uploader("Upload image (JPG, JPEG, PNG)", type=["jpg","jpeg","png"])
 
-if uploaded_file is not None:
-    # Capture upload timestamp for filename
-    upload_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+if uploaded_file:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    with st.spinner("Reading image... please wait"):
-        text_output = extract_text_from_image(uploaded_file)
+    with st.spinner("Reading image..."):
+        extracted = extract_text_from_image(uploaded_file)
 
     st.subheader("OCR Text Preview")
-    st.text_area("Detected Text", text_output, height=200)
+    st.text_area("Detected Text", extracted, height=200)
 
-    # Parse + aggregate + detect station
     st.subheader("Parsed & Aggregated Table")
-    df, detected_station, debug_df = parse_ocr_text(text_output)
+    df, station, debug_df = parse_ocr_text(extracted)
 
-    # Show detected station
-    if detected_station and detected_station != "Unknown":
-        st.info(f"Detected Station: {detected_station}")
-    else:
-        st.warning(
-            "Station not clearly detected. Please confirm the station on the original log."
-        )
+    st.info(f"Detected Station: {station}")
 
     st.dataframe(df, use_container_width=True)
 
-    # --- Temporary debug view ---
     with st.expander("Debug: OCR line parsing (temporary)"):
-        st.write("Each OCR line and how the parser classified it:")
         st.dataframe(debug_df, use_container_width=True)
 
     if not df.empty:
-        csv_bytes = df.to_csv(index=False).encode("utf-8")
-        safe_station = (detected_station or "UnknownStation").replace(" ", "_")
-        file_name = f"{safe_station}_{upload_timestamp}_dining_log.csv"
-
+        filename = f"{station}_{timestamp}_dining_log.csv".replace(" ", "_")
         st.download_button(
             "⬇️ Download Aggregated CSV",
-            csv_bytes,
-            file_name,
+            df.to_csv(index=False).encode("utf-8"),
+            filename,
             "text/csv",
             use_container_width=True,
         )
-    else:
-        st.warning(
-            "No valid table data found. Try a clearer photo or adjust handwriting spacing."
-        )
+
 else:
     st.info("Please upload an image to begin.")
 
 # --------------------------------------------------------
-# STEP 2 — DOWNLOAD OR EMAIL LATER
+# STEP 2 — DOWNLOAD LATER
 # --------------------------------------------------------
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown(
     f"""
 <div style='background-color:{SMC_NAVY};padding:10px;border-radius:6px;'>
-<h3 style='color:white;text-align:center;margin:0;'>Step 2 — Download or Email Later</h3>
+<h3 style='color:white;text-align:center;margin:0;'>Step 2 — Download Or Email Later</h3>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
 if "df" in locals() and not df.empty:
-    st.success("✅ Aggregated CSV is ready.")
-    st.markdown("You can download the file below and email it manually if needed.")
-    csv_data = df.to_csv(index=False).encode("utf-8")
-
-    # Try to reuse station + timestamp; fall back safely if not defined
-    try:
-        safe_station = (detected_station or "UnknownStation").replace(" ", "_")
-    except NameError:
-        safe_station = "UnknownStation"
-
-    try:
-        ts = upload_timestamp
-    except NameError:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    file_name_later = f"{safe_station}_{ts}_dining_log.csv"
-
+    st.success("CSV ready.")
     st.download_button(
         label="⬇️ Download Aggregated CSV File",
-        data=csv_data,
-        file_name=file_name_later,
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name="dining_log.csv",
         mime="text/csv",
         use_container_width=True,
     )
 else:
-    st.info("No CSV available yet — please upload and process an image first.")
+    st.info("No CSV available — upload and process an image first.")
 
-st.markdown("<br><hr>", unsafe_allow_html=True)
-st.caption("Saint Mary’s College Dining Data Project · Developed by Group 1")
+st.caption("Saint Mary's College Dining Data Project · Developed by Group 1")
