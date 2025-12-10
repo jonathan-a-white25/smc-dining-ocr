@@ -139,6 +139,7 @@ def parse_ocr_text(text: str):
         * Multi-item block: several item lines, then several qty lines.
         * Two-line: "Rice" / "5 lbs"
     - Keeps a FIFO queue of pending items so quantities pair in order.
+    - Uses fuzzy + word-overlap grouping so misspellings merge.
     - Returns: aggregated_df, station, debug_df
     """
 
@@ -296,40 +297,39 @@ def parse_ocr_text(text: str):
 
     # -------- Fuzzy grouping (merge misspellings) --------
     # Preserve first-seen order instead of sorting
-unique_items = list(dict.fromkeys(df["Item"].tolist()))
-canonicals = []
-mapping = {}
-cutoff = 0.87
+    unique_items = list(dict.fromkeys(df["Item"].tolist()))
+    canonicals = []
+    mapping = {}
+    cutoff = 0.87
 
-for item in unique_items:
-    if not canonicals:
-        canonicals.append(item)
-        mapping[item] = item
-        continue
+    for item in unique_items:
+        if not canonicals:
+            canonicals.append(item)
+            mapping[item] = item
+            continue
 
-    # 1) Try strong character-level match first
-    match = difflib.get_close_matches(item, canonicals, n=1, cutoff=cutoff)
+        # 1) Try strong character-level match first
+        match = difflib.get_close_matches(item, canonicals, n=1, cutoff=cutoff)
+        if match:
+            mapping[item] = match[0]
+            continue
 
-    if match:
-        mapping[item] = match[0]
-        continue
+        # 2) Fallback: word-level overlap (e.g., "Broccoli" vs "Raasted Broccoli")
+        tokens = set(item.split())
+        best_canon = None
+        best_overlap = 0
 
-    # 2) Fallback: word-level overlap (e.g., "Broccoli" vs "Raasted Broccoli")
-    tokens = set(item.split())
-    best_canon = None
-    best_overlap = 0
+        for c in canonicals:
+            overlap = len(tokens & set(c.split()))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_canon = c
 
-    for c in canonicals:
-        overlap = len(tokens & set(c.split()))
-        if overlap > best_overlap:
-            best_overlap = overlap
-            best_canon = c
-
-    if best_canon and best_overlap > 0:
-        mapping[item] = best_canon
-    else:
-        canonicals.append(item)
-        mapping[item] = item
+        if best_canon and best_overlap > 0:
+            mapping[item] = best_canon
+        else:
+            canonicals.append(item)
+            mapping[item] = item
 
     df["Canonical Item"] = df["Item"].map(mapping)
 
@@ -345,6 +345,7 @@ for item in unique_items:
 
     debug_df = pd.DataFrame(debug_rows)
     return aggregated, station, debug_df
+
 
 # --------------------------------------------------------
 # FILE UPLOAD SECTION
@@ -376,7 +377,6 @@ if uploaded_file is not None:
     st.subheader("Parsed & Aggregated Table")
     df, detected_station, debug_df = parse_ocr_text(text_output)
 
-
     # Show detected station
     if detected_station and detected_station != "Unknown":
         st.info(f"Detected Station: {detected_station}")
@@ -387,7 +387,7 @@ if uploaded_file is not None:
 
     st.dataframe(df, use_container_width=True)
 
-     # --- Temporary debug view ---
+    # --- Temporary debug view ---
     with st.expander("Debug: OCR line parsing (temporary)"):
         st.write("Each OCR line and how the parser classified it:")
         st.dataframe(debug_df, use_container_width=True)
