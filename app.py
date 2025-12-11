@@ -99,7 +99,7 @@ def extract_text_from_image(image_bytes, client):
 # =========================================================
 #  Always Hardcoded Parsed Output
 # =========================================================
-def get_fixed_output(station_name, selected_date):
+def get_fixed_output(station_name):
     summary = {
         "Teriyaki Chicken": 55,
         "Rice": 45,
@@ -109,7 +109,7 @@ def get_fixed_output(station_name, selected_date):
 
     df = pd.DataFrame(
         [
-            {"station": station_name, "date": selected_date, "item": item, "quantity": qty}
+            {"station": station_name, "item": item, "quantity": qty}
             for item, qty in summary.items()
         ]
     )
@@ -129,7 +129,7 @@ st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 1: Upload & OCR Extraction"),
 station_name = st.selectbox(
     "Select Station",
     ["Stacked", "Simple Servings", "Sizzle", "Slices", "Twists", "Bliss"],
-    index=2
+    index=0
 )
 
 # Date picker
@@ -150,7 +150,7 @@ if uploaded_file is not None and client is not None:
 
         st.write(f"Summarized output for **{station_name}** on **{selected_date}**:")
 
-        df = get_fixed_output(station_name, selected_date)
+        df = get_fixed_output(station_name)
         st.dataframe(df, use_container_width=True)
 
         # STEP 3
