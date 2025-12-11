@@ -70,8 +70,7 @@ RED_BANNER_TEMPLATE = """
 st.markdown(RED_BANNER, unsafe_allow_html=True)
 
 st.write(
-    "Upload a photo of the tracking sheet. The app will run OCR, show the raw text, "
-    "and display a parsed summary."
+    "Upload a photo of the tracking sheet. The app will run OCR and display a parsed summary."
 )
 
 
@@ -177,8 +176,6 @@ if uploaded_file is not None and client is not None:
     raw_text = extract_text_from_image(image_bytes, client)
 
     if raw_text:
-
-        st.text_area("Raw OCR Output", raw_text, height=220)
 
         # Step 2
         st.markdown(RED_BANNER_TEMPLATE.format(text="Step 2: Parsed Items"), unsafe_allow_html=True)
