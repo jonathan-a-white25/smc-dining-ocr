@@ -83,10 +83,10 @@ and generate a clean CSV for you to download.
 )
 
 # --------------------------------------------------------
-# OCR CALL
+# OCR CALL — return full text + per-word bounding boxes
 # --------------------------------------------------------
-def extract_text_from_image(uploaded_image):
-    """Google Vision OCR using Streamlit Secrets credentials."""
+def extract_text_and_boxes(uploaded_image):
+    """Use Google Vision to get full text and bounding boxes for each word."""
     try:
         info = st.secrets["gcp_service_account"]
         creds = service_account.Credentials.from_service_account_info(dict(info))
@@ -98,9 +98,32 @@ def extract_text_from_image(uploaded_image):
     content = uploaded_image.read()
     image = vision.Image(content=content)
     response = client.text_detection(image=image)
-    texts = response.text_annotations
+    annotations = response.text_annotations
 
-    return texts[0].description if texts else ""
+    if not annotations:
+        return "", []
+
+    full_text = annotations[0].description
+
+    # Build list of word boxes with centers
+    word_boxes = []
+    for ann in annotations[1:]:
+        if not ann.description.strip():
+            continue
+        vertices = ann.bounding_poly.vertices
+        xs = [v.x for v in vertices]
+        ys = [v.y for v in vertices]
+        cx = sum(xs) / len(xs)
+        cy = sum(ys) / len(ys)
+        word_boxes.append(
+            {
+                "text": ann.description,
+                "cx": cx,
+                "cy": cy,
+            }
+        )
+
+    return full_text, word_boxes
 
 
 # --------------------------------------------------------
@@ -115,166 +138,170 @@ def detect_station_name(text: str) -> str:
 
 
 # --------------------------------------------------------
-# MAIN PARSER (NO MERGE STEP)
+# HELPER: CLUSTER WORDS INTO ROWS BY Y-COORDINATE
 # --------------------------------------------------------
-def parse_ocr_text(text: str):
+def cluster_rows(word_boxes, row_threshold=25):
     """
-    OCR text parser for dining logs.
+    Group words into rows based on their vertical (cy) position.
 
-    - Detects station + date.
-    - Normalizes units (#, lb, lbs, pounds → 'lbs').
-    - Uses FIFO queue to associate item-only lines with following qty-only lines.
-    - Normalizes item names (punctuation, broccoli synonyms, title case).
-    - Uses fuzzy + token-based grouping to merge misspellings.
+    row_threshold: max vertical distance (pixels) between words
+                   to be considered in the same row.
+    """
+    if not word_boxes:
+        return []
+
+    sorted_words = sorted(word_boxes, key=lambda w: w["cy"])
+    rows = []
+    current_row = []
+    current_y = None
+
+    for w in sorted_words:
+        if current_y is None:
+            current_row = [w]
+            current_y = w["cy"]
+            continue
+
+        if abs(w["cy"] - current_y) <= row_threshold:
+            current_row.append(w)
+            # keep running average (not critical, just stability)
+            current_y = (current_y + w["cy"]) / 2.0
+        else:
+            rows.append(current_row)
+            current_row = [w]
+            current_y = w["cy"]
+
+    if current_row:
+        rows.append(current_row)
+
+    return rows
+
+
+# --------------------------------------------------------
+# HELPER: PARSE A SINGLE ROW INTO (ITEM, QUANTITY)
+# --------------------------------------------------------
+def parse_row_tokens(tokens):
+    """
+    Given a list of tokens for a single row (ordered left → right),
+    return (item_text, quantity_value) or (None, None) if no quantity found.
+    """
+
+    # Detect the first quantity-ish token
+    qty_index = None
+    qty_value = None
+
+    for idx, tok in enumerate(tokens):
+        raw = tok.strip()
+        if not raw:
+            continue
+
+        # normalize: keep letters, digits, and #
+        t = re.sub(r"[^\w#]", "", raw.lower())
+
+        if not t:
+            continue
+
+        # pattern: digits + optional unit/# suffix
+        m = re.match(r"^(\d+)(#|lbs?|lb|pounds?)?$", t)
+        if m:
+            try:
+                qty_value = float(m.group(1))
+                qty_index = idx
+                break
+            except ValueError:
+                continue
+
+    if qty_index is None or qty_value is None:
+        return None, None
+
+    # Everything to the left of the first quantity token is the item
+    item_tokens = tokens[:qty_index]
+    item_text = " ".join(item_tokens).strip()
+
+    if not item_text:
+        return None, None
+
+    return item_text, qty_value
+
+
+# --------------------------------------------------------
+# MAIN PARSER — BOUNDING BOX–BASED
+# --------------------------------------------------------
+def parse_ocr_text(full_text: str, word_boxes):
+    """
+    Full OCR parsing with bounding boxes:
+
+    - Detects station and date from full text.
+    - Clusters words into rows using Y-coordinates.
+    - For each row, finds first numeric quantity on the right.
+    - Treats everything to the left as item name.
+    - Normalizes item names (punctuation, broccoli synonyms, Title Case).
+    - Fuzzy merges similar items and aggregates quantities.
     - Returns: aggregated_df, station, debug_df
     """
 
-    # ---- Station + Date ----
-    station = detect_station_name(text)
-    date_match = re.search(r"Date\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, re.IGNORECASE)
+    station = detect_station_name(full_text)
+    date_match = re.search(r"Date\s+(\d{1,2}/\d{1,2}/\d{2,4})", full_text, re.IGNORECASE)
     header_date = date_match.group(1) if date_match else ""
 
-    # ---- Normalize units but do NOT modify plain numbers ----
-    cleaned = text
+    # Normalize units inside tokens for easier parsing
+    # (we only use this inside parse_row_tokens, so we keep boxes as-is)
+    # The per-token logic there handles #, lb, lbs, pounds etc.
 
-    # Fix obvious 'lbs' typos like '1bs', 'lbs.' or 'lb.'
-    cleaned = re.sub(r"1[bB][sS]\.?", "lbs", cleaned)
-    cleaned = re.sub(r"l[bB][sS]\.?", "lbs", cleaned)
+    # Cluster words into row groups
+    rows = cluster_rows(word_boxes, row_threshold=25)
 
-    # Convert '#', 'lb', 'lbs', 'pounds' → 'lbs'
-    cleaned = re.sub(r"(\d+)\s*#", r"\1 lbs", cleaned)
-    cleaned = re.sub(
-        r"(\d+)\s*(?:pounds?|pound|lbs?|lb)\b\.?",
-        r"\1 lbs",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-
-    cleaned_lines = [ln.rstrip("\n") for ln in cleaned.splitlines()]
-
-    # ----------------------------------------------------
-    # PATTERNS FOR CLASSIFICATION
-    # ----------------------------------------------------
-    inline_re = re.compile(
-        r"^([A-Za-z][A-Za-z\s\./,&-]+?)\s+(\d+(?:\.\d+)?)\s*lbs\b",
-        re.IGNORECASE,
-    )
-    qty_re = re.compile(
-        r"^(\d+(?:\.\d+)?)\s*lbs\b",
-        re.IGNORECASE,
-    )
-    header_re = re.compile(
-        r"^(Station|Time|Item|Date|Quantity)\b",
-        re.IGNORECASE,
-    )
-
-    rows = []
+    all_rows = []
     debug_rows = []
-    pending_items = []  # FIFO queue of items waiting for a quantity
-    last_item = None    # Most recent item, used as fallback
 
-    # ----------------------------------------------------
-    # CLASSIFICATION + ITEM/QTY MATCHING LOOP
-    # ----------------------------------------------------
-    for idx, line in enumerate(cleaned_lines):
-        cl = line.strip()
-        if not cl:
-            continue
+    for row_idx, row_words in enumerate(rows):
+        # Sort each row left→right
+        row_words_sorted = sorted(row_words, key=lambda w: w["cx"])
+        tokens = [w["text"] for w in row_words_sorted]
+        row_text = " ".join(tokens)
 
-        cl = re.sub(r"\s+", " ", cl)
-
-        classification = "ignored"
+        # Classify row
+        classification = "data"
         item_candidate = ""
         qty_candidate = ""
-        last_item_after = last_item
 
-        # ---- Headers ----
-        if header_re.match(cl):
+        # Skip header-like rows
+        header_keywords = ["station", "time", "item", "quantity", "date"]
+        if any(re.search(rf"\b{hk}\b", row_text, re.IGNORECASE) for hk in header_keywords):
             classification = "header"
-
         else:
-            # ---- Case 1: inline "Item 10 lbs" ----
-            m_inline = inline_re.match(cl)
-            if m_inline:
-                classification = "inline"
-                item_candidate = m_inline.group(1).strip()
-                qty_candidate = m_inline.group(2).strip()
-
-                item = item_candidate
-                try:
-                    qty = float(qty_candidate)
-                    rows.append((header_date, item, qty))
-                    last_item = item
-                    last_item_after = item
-                except ValueError:
-                    pass
-
+            item, qty = parse_row_tokens(tokens)
+            if item is None or qty is None:
+                classification = "no_qty"
             else:
-                # ---- Case 2: quantity-only "10 lbs" ----
-                m_qty = qty_re.match(cl)
-                if m_qty:
-                    classification = "qty_only"
-                    qty_candidate = m_qty.group(1).strip()
-
-                    try:
-                        qty = float(qty_candidate)
-                    except ValueError:
-                        qty = None
-
-                    if qty is not None:
-                        if pending_items:
-                            # Use the oldest pending item (FIFO)
-                            item = pending_items.pop(0)
-                        else:
-                            # Fallback: use the last seen item
-                            item = last_item
-
-                        if item is not None:
-                            rows.append((header_date, item, qty))
-                            last_item = item
-                            last_item_after = item
-
-                else:
-                    # ---- Case 3: item-only line (letters, no digits) ----
-                    has_letters = bool(re.search(r"[A-Za-z]", cl))
-                    has_digits = bool(re.search(r"\d", cl))
-
-                    if has_letters and not has_digits:
-                        classification = "item_only"
-                        item_candidate = cl
-                        pending_items.append(cl)
-                        last_item = cl
-                        last_item_after = cl
+                classification = "parsed"
+                item_candidate = item
+                qty_candidate = qty
+                all_rows.append((header_date, item, qty))
 
         debug_rows.append(
             {
-                "idx": idx,
-                "cleaned_line": cl,
+                "row_index": row_idx,
+                "row_text": row_text,
                 "classification": classification,
                 "item_candidate": item_candidate,
                 "qty_candidate": qty_candidate,
-                "pending_items_after_line": list(pending_items),
-                "last_item_after_line": last_item_after,
             }
         )
 
-    # ----------------------------------------------------
-    # HANDLE CASE: NO ROWS FOUND
-    # ----------------------------------------------------
-    if not rows:
+    # If no rows with quantities, return empty
+    if not all_rows:
         empty_df = pd.DataFrame(
             columns=["Station", "Date", "Item", "Total Quantity (lbs)"]
         )
         debug_df = pd.DataFrame(debug_rows)
         return empty_df, station, debug_df
 
-    # ----------------------------------------------------
-    # BUILD WORKING DATAFRAME
-    # ----------------------------------------------------
-    df = pd.DataFrame(rows, columns=["Date", "Item", "Quantity"])
+    # Build DataFrame from parsed rows
+    df = pd.DataFrame(all_rows, columns=["Date", "Item", "Quantity"])
     df["Quantity"] = df["Quantity"].astype(float)
 
     # ---- Item name normalization ----
+
     # 1) strip trailing punctuation
     df["Item"] = df["Item"].str.replace(r"[^\w\s]", "", regex=True)
 
@@ -372,18 +399,16 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    # Capture upload timestamp for filename
     upload_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     with st.spinner("Reading image... please wait"):
-        text_output = extract_text_from_image(uploaded_file)
+        full_text, word_boxes = extract_text_and_boxes(uploaded_file)
 
     st.subheader("OCR Text Preview")
-    st.text_area("Detected Text", text_output, height=200)
+    st.text_area("Detected Text", full_text, height=200)
 
-    # Parse + aggregate + detect station
     st.subheader("Parsed & Aggregated Table")
-    df, detected_station, debug_df = parse_ocr_text(text_output)
+    df, detected_station, debug_df = parse_ocr_text(full_text, word_boxes)
 
     # Show detected station
     if detected_station and detected_station != "Unknown":
@@ -396,8 +421,8 @@ if uploaded_file is not None:
     st.dataframe(df, use_container_width=True)
 
     # Debug view
-    with st.expander("Debug: OCR line parsing (temporary)"):
-        st.write("Each OCR line and how the parser classified it:")
+    with st.expander("Debug: row reconstruction and parsing"):
+        st.write("Each reconstructed row and how the parser classified it:")
         st.dataframe(debug_df, use_container_width=True)
 
     if not df.empty:
@@ -437,7 +462,6 @@ if "df" in locals() and not df.empty:
     st.markdown("You can download the file below and email it manually if needed.")
     csv_data = df.to_csv(index=False).encode("utf-8")
 
-    # Try to reuse station + timestamp; fall back safely if not defined
     try:
         safe_station = (detected_station or "UnknownStation").replace(" ", "_")
     except NameError:
