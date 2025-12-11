@@ -122,25 +122,38 @@ if run_demo:
         submit_email = st.form_submit_button("Send CSV via Email")
 
     if submit_email:
-        if not sender or not recipient:
-            st.error("Both sender and recipient addresses are required.")
-        else:
-            ok, msg = send_email_with_attachment(
-                sender=sender,
-                recipient=recipient,
-                subject=f"{station_name} Station – Meal Log CSV",
-                body_text=(
-                    f"Attached is the meal log export for the {station_name} station.\n"
-                    f"Generated on {date_str} at {time_str} PT."
-                ),
-                attachment_bytes=csv_bytes,
-                attachment_name=filename
-            )
+    if not sender or not recipient:
+        st.error("Both sender and recipient are required.")
+    else:
+        st.write("Attempting to send email...")  # DEBUG LINE
 
-            if ok:
-                st.success(f"Email sent successfully to {recipient}!")
-            else:
-                st.error(f"Email failed: {msg}")
+        subject = f"{station_name} Log – {date_str} ({time_str} PT)"
+
+        body = (
+            f"Hello,\n\n"
+            f"Attached is the meal log for the {station_name} station.\n"
+            f"- Date: {date_str}\n"
+            f"- Time: {time_str} PT\n\n"
+            f"{notes}\n\n"
+            f"Sent automatically by the SMC Dining OCR system for today's demonstration."
+        )
+
+        ok, msg = send_email_with_attachment(
+            sender=sender,
+            recipient=recipient,
+            subject=subject,
+            body_text=body,
+            attachment_bytes=csv_bytes,
+            attachment_name=filename
+        )
+
+        # ALWAYS show the backend message
+        st.write("Email send function response:", msg)
+
+        if ok:
+            st.success(f"Email sent successfully to {recipient}!")
+        else:
+            st.error(f"EMAIL FAILED: {msg}")
 
 
 else:
