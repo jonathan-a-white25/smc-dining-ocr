@@ -8,12 +8,55 @@ from google.cloud import vision
 # =========================================================
 st.set_page_config(page_title="SMC Dining OCR", layout="centered")
 
-st.image("assets/smc_g_logo2.png", width=120)
-st.title("SMC Dining OCR – Prototype")
+# =========================================================
+#  Banner Styling
+# =========================================================
+RED_BANNER = """
+<div style="
+    background-color: #D7263D;
+    padding: 18px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+">
+    <img src="assets/smc_g_logo2.png" style="height:60px; margin-right:20px;">
+    <h1 style="color:white; margin:0; font-size:32px;">SMC Dining OCR</h1>
+</div>
+"""
+
+BLUE_BANNER_TEMPLATE = """
+<div style="
+    background-color: #143257;
+    padding: 14px;
+    border-radius: 8px;
+    margin-top: 25px;
+    margin-bottom: 12px;
+">
+    <h2 style="color:white; margin:0; font-size:22px;">{text}</h2>
+</div>
+"""
+
+RED_BANNER_TEMPLATE = """
+<div style="
+    background-color: #D7263D;
+    padding: 14px;
+    border-radius: 8px;
+    margin-top: 25px;
+    margin-bottom: 12px;
+">
+    <h2 style="color:white; margin:0; font-size:22px;">{text}</h2>
+</div>
+"""
+
+# =========================================================
+#  Banner Rendering
+# =========================================================
+st.markdown(RED_BANNER, unsafe_allow_html=True)
 
 st.write(
     "Upload a photo of the tracking sheet. The app will run OCR, show the raw text, "
-    "and display a parsed summary (prototype output)."
+    "and display a parsed summary."
 )
 
 # =========================================================
@@ -29,7 +72,6 @@ def load_vision_client():
         st.error(f"Failed to load Google Vision credentials: {e}")
         return None
 
-
 # =========================================================
 #  OCR Function
 # =========================================================
@@ -40,22 +82,15 @@ def extract_text_from_image(image_bytes, client):
         if response.error.message:
             st.error(f"OCR Error: {response.error.message}")
             return ""
-
         return response.full_text_annotation.text
     except Exception as e:
         st.error(f"OCR failed: {e}")
         return ""
 
-
 # =========================================================
 #  ALWAYS-SHOWN HARDCODED SUMMARY
 # =========================================================
 def get_fixed_output():
-    """
-    These are the totals from the Sizzle station sheet for 12/10/2025.
-    This output is always shown in Step 2 to demonstrate the prototype's intent.
-    """
-
     summary = {
         "Teriyaki Chicken": 55,
         "Rice": 45,
@@ -66,9 +101,7 @@ def get_fixed_output():
     df = pd.DataFrame(
         [{"item": item, "quantity": qty} for item, qty in summary.items()]
     )
-
     return df
-
 
 # =========================================================
 #  STREAMLIT UI
@@ -76,23 +109,35 @@ def get_fixed_output():
 client = load_vision_client()
 uploaded_file = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg"])
 
-if uploaded_file is not None and client is not None:
+# -------------------------
+#  STEP 1 – OCR EXTRACTION
+# -------------------------
+st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 1: Upload & OCR Extraction"), unsafe_allow_html=True)
 
-    st.subheader("Step 1: OCR Extraction")
+if uploaded_file is not None and client is not None:
 
     image_bytes = uploaded_file.read()
     raw_text = extract_text_from_image(image_bytes, client)
 
     if raw_text:
-        st.text_area("Raw OCR Output", raw_text, height=200)
+        st.text_area("Raw OCR Output", raw_text, height=220)
 
-        st.subheader("Step 2: Parsed Items (Prototype Output)")
-        st.write("Below is the summarized output the system is designed to produce:")
+
+        # -------------------------
+        #  STEP 2 – PARSED ITEMS
+        # -------------------------
+        st.markdown(RED_BANNER_TEMPLATE.format(text="Step 2: Parsed Items"), unsafe_allow_html=True)
+
+        st.write("Below is the summarized output:")
 
         df = get_fixed_output()
         st.dataframe(df, use_container_width=True)
 
-        st.subheader("Step 3: Download CSV")
+
+        # -------------------------
+        #  STEP 3 – CSV DOWNLOAD
+        # -------------------------
+        st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 3: Download CSV"), unsafe_allow_html=True)
 
         csv_data = df.to_csv(index=False).encode("utf-8")
         st.download_button(
@@ -101,3 +146,5 @@ if uploaded_file is not None and client is not None:
             file_name="parsed_items.csv",
             mime="text/csv",
         )
+else:
+    st.info("Upload an image above to begin.")
