@@ -106,55 +106,56 @@ if run_demo:
     )
 
 
-    # =====================================================
-    #  STEP 3 — Email Form
-    # =====================================================
-    st.markdown("## Step 3 — Email CSV File")
-    st.info("Use your verified SendGrid sender email: jon.whitea@gmail.com")
+# =====================================================
+#  STEP 3 — Email Form
+# =====================================================
+banner("Step 3 — Email the CSV File", "#1E7F3B")  # green
 
-    # Debug indicator
-    api_key_exists = bool(st.secrets.get("SENDGRID_API_KEY"))
-    st.caption(f"SENDGRID key loaded: {api_key_exists} (length={len(st.secrets.get('SENDGRID_API_KEY',''))})")
+st.info("Use your verified SendGrid sender email: jon.whitea@gmail.com")
 
-    with st.form("email_form"):
-        sender = st.text_input("Sender Email", value="jon.whitea@gmail.com")
-        recipient = st.text_input("Recipient Email")
-        submit_email = st.form_submit_button("Send CSV via Email")
+api_key_exists = bool(st.secrets.get("SENDGRID_API_KEY"))
+st.caption(f"SENDGRID key loaded: {api_key_exists}")
+
+with st.form("email_form"):
+    sender = st.text_input("Sender Email", value="jon.whitea@gmail.com")
+    recipient = st.text_input("Recipient Email")
+    notes = st.text_area("Optional Notes", value="Thank you! Please review today's log.")
+
+    submit_email = st.form_submit_button("Send CSV via Email")
 
     if submit_email:
-    if not sender or not recipient:
-        st.error("Both sender and recipient are required.")
-    else:
-        st.write("Attempting to send email...")  # DEBUG LINE
+        if not sender or not recipient:
+            st.error("Both sender and recipient are required.")
 
-        subject = f"{station_name} Log – {date_str} ({time_str} PT)"
-
-        body = (
-            f"Hello,\n\n"
-            f"Attached is the meal log for the {station_name} station.\n"
-            f"- Date: {date_str}\n"
-            f"- Time: {time_str} PT\n\n"
-            f"{notes}\n\n"
-            f"Sent automatically by the SMC Dining OCR system for today's demonstration."
-        )
-
-        ok, msg = send_email_with_attachment(
-            sender=sender,
-            recipient=recipient,
-            subject=subject,
-            body_text=body,
-            attachment_bytes=csv_bytes,
-            attachment_name=filename
-        )
-
-        # ALWAYS show the backend message
-        st.write("Email send function response:", msg)
-
-        if ok:
-            st.success(f"Email sent successfully to {recipient}!")
         else:
-            st.error(f"EMAIL FAILED: {msg}")
+            st.write("Attempting to send email...")  # DEBUG
 
+            subject = f"{station_name} Log – {date_str} ({time_str} PT)"
+
+            body = (
+                f"Hello,\n\n"
+                f"Attached is the meal log for the {station_name} station.\n"
+                f"- Date: {date_str}\n"
+                f"- Time: {time_str} PT\n\n"
+                f"{notes}\n\n"
+                f"Sent automatically by the SMC Dining OCR system."
+            )
+
+            ok, msg = send_email_with_attachment(
+                sender=sender,
+                recipient=recipient,
+                subject=subject,
+                body_text=body,
+                attachment_bytes=csv_bytes,
+                attachment_name=filename
+            )
+
+            st.write("Email send function response:", msg)
+
+            if ok:
+                st.success(f"Email sent successfully to {recipient}!")
+            else:
+                st.error(f"EMAIL FAILED: {msg}")
 
 else:
     st.info("Upload a sheet and click **Process Log** to begin.")
