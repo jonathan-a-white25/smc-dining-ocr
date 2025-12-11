@@ -1,7 +1,7 @@
 # --------------------------------------------------------
 # SMC Dining OCR — Streamlit + Google Vision (Cloud Ready)
-# Author: Jonathan White
-# Date: October 2025
+# Author: Jonathan White (Revised by Gemini)
+# Date: December 2025
 # --------------------------------------------------------
 
 import streamlit as st
@@ -32,7 +32,7 @@ STATION_NAMES = [
 ]
 
 # --------------------------------------------------------
-# OPTIONAL CSS
+# OPTIONAL CSS (Assuming the user has the theme.css file)
 # --------------------------------------------------------
 css_path = Path("assets/theme.css")
 if css_path.exists():
@@ -40,14 +40,19 @@ if css_path.exists():
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 # --------------------------------------------------------
-# LOGO
+# LOGO (Assuming the user has the logo file)
 # --------------------------------------------------------
 logo_path = Path("assets/smc_g_logo.png")
 
 
 def load_logo_base64(path: Path) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+    """Loads logo and encodes to base64 for embedding in Streamlit markdown."""
+    try:
+        with open(path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except FileNotFoundError:
+        st.error(f"Logo file not found at {path}. Using placeholder.")
+        return ""
 
 
 logo_data = load_logo_base64(logo_path)
@@ -58,7 +63,7 @@ logo_data = load_logo_base64(logo_path)
 st.markdown(
     f"""
     <div style="background-color:{SMC_NAVY};padding:15px 25px;border-radius:8px;
-                display:flex;justify-content:space-between;align-items:center;">
+                 display:flex;justify-content:space-between;align-items:center;">
         <div>
             <h1 style="color:white;margin-bottom:4px;">SMC Dining OCR</h1>
             <p style="color:white;margin-top:0;font-size:16px;">
@@ -66,7 +71,7 @@ st.markdown(
             </p>
         </div>
         <img src="data:image/png;base64,{logo_data}" width="80"
-             style="border-radius:6px;margin-left:10px;">
+              style="border-radius:6px;margin-left:10px;">
     </div>
     """,
     unsafe_allow_html=True,
@@ -76,7 +81,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 st.write(
     """
-Upload a photo of your handwritten prep log.  
+Upload a photo of your handwritten prep log. 
 OCR will extract all items and quantities, normalize units, merge similar items,
 and generate a clean CSV for you to download.
 """
@@ -84,10 +89,12 @@ and generate a clean CSV for you to download.
 
 # --------------------------------------------------------
 # OCR CALL — return full text + per-word bounding boxes
+# (No changes needed here - this is Google Vision boilerplate)
 # --------------------------------------------------------
 def extract_text_and_boxes(uploaded_image):
     """Use Google Vision to get full text and bounding boxes for each word."""
     try:
+        # NOTE: Assumes 'gcp_service_account' is configured in st.secrets
         info = st.secrets["gcp_service_account"]
         creds = service_account.Credentials.from_service_account_info(dict(info))
         client = vision.ImageAnnotatorClient(credentials=creds)
@@ -97,31 +104,41 @@ def extract_text_and_boxes(uploaded_image):
 
     content = uploaded_image.read()
     image = vision.Image(content=content)
-    response = client.text_detection(image=image)
-    annotations = response.text_annotations
-
-    if not annotations:
+    # Using DOCUMENT_TEXT_DETECTION for better table/layout understanding
+    response = client.document_text_detection(image=image)
+    
+    # We will process the annotations structure from DOCUMENT_TEXT_DETECTION
+    if not response.text_annotations:
         return "", []
 
-    full_text = annotations[0].description
+    full_text = response.text_annotations[0].description
 
-    # Build list of word boxes with centers
+    # Build list of word boxes with centers (from the pages/blocks/paragraphs/words structure)
     word_boxes = []
-    for ann in annotations[1:]:
-        if not ann.description.strip():
-            continue
-        vertices = ann.bounding_poly.vertices
-        xs = [v.x for v in vertices]
-        ys = [v.y for v in vertices]
-        cx = sum(xs) / len(xs)
-        cy = sum(ys) / len(ys)
-        word_boxes.append(
-            {
-                "text": ann.description,
-                "cx": cx,
-                "cy": cy,
-            }
-        )
+    
+    # Iterate through pages, blocks, paragraphs, and words to get granular boxes
+    for page in response.full_text_annotation.pages:
+        for block in page.blocks:
+            for paragraph in block.paragraphs:
+                for word in paragraph.words:
+                    word_text = "".join([symbol.text for symbol in word.symbols])
+                    
+                    if not word_text.strip():
+                        continue
+                        
+                    vertices = word.bounding_box.vertices
+                    xs = [v.x for v in vertices]
+                    ys = [v.y for v in vertices]
+                    cx = sum(xs) / len(xs)
+                    cy = sum(ys) / len(ys)
+                    
+                    word_boxes.append(
+                        {
+                            "text": word_text,
+                            "cx": cx,
+                            "cy": cy,
+                        }
+                    )
 
     return full_text, word_boxes
 
@@ -139,13 +156,11 @@ def detect_station_name(text: str) -> str:
 
 # --------------------------------------------------------
 # HELPER: CLUSTER WORDS INTO ROWS BY Y-COORDINATE
+# (Uses original logic, which is a sound starting point)
 # --------------------------------------------------------
 def cluster_rows(word_boxes, row_threshold=25):
     """
     Group words into rows based on their vertical (cy) position.
-
-    row_threshold: max vertical distance (pixels) between words
-                   to be considered in the same row.
     """
     if not word_boxes:
         return []
@@ -161,10 +176,11 @@ def cluster_rows(word_boxes, row_threshold=25):
             current_y = w["cy"]
             continue
 
+        # Check proximity to the running average Y-coordinate of the row
         if abs(w["cy"] - current_y) <= row_threshold:
             current_row.append(w)
-            # keep running average (not critical, just stability)
-            current_y = (current_y + w["cy"]) / 2.0
+            # Update running average Y for stability
+            current_y = (current_y * (len(current_row) - 1) + w["cy"]) / len(current_row)
         else:
             rows.append(current_row)
             current_row = [w]
@@ -178,6 +194,9 @@ def cluster_rows(word_boxes, row_threshold=25):
 
 # --------------------------------------------------------
 # HELPER: PARSE A SINGLE ROW INTO (ITEM, QUANTITY)
+# 
+# CRITICAL REVISION: Searches from the right and uses a robust RegEx 
+# to capture quantity with flexible units.
 # --------------------------------------------------------
 def parse_row_tokens(tokens):
     """
@@ -185,42 +204,98 @@ def parse_row_tokens(tokens):
     return (item_text, quantity_value) or (None, None) if no quantity found.
     """
 
-    # Detect the first quantity-ish token
-    qty_index = None
-    qty_value = None
+    # RegEx for quantity: (Number with optional decimal) + (optional space/junk) + (Unit)
+    # Allows lbs, lb, #, pounds. The \s* handles the space flexibility.
+    # The \b ensures the unit is a word boundary.
+    UNIT_REGEX = r"(\d+\.?\d*)\s*([l\#]b?s?|pounds?)\b"
 
-    for idx, tok in enumerate(tokens):
+    # CRITICAL: Iterate from the right-most token to ensure we capture 
+    # the quantity in the Quantity column, not a false positive in the Item column.
+    for idx, tok in reversed(list(enumerate(tokens))):
         raw = tok.strip()
         if not raw:
             continue
-
-        # normalize: keep letters, digits, and #
-        t = re.sub(r"[^\w#]", "", raw.lower())
-
-        if not t:
-            continue
-
-        # pattern: digits + optional unit/# suffix
-        m = re.match(r"^(\d+)(#|lbs?|lb|pounds?)?$", t)
+        
+        # 1. Look for a number AND a unit (e.g., '8 lbs', '10#', '4.5 lb')
+        m = re.search(UNIT_REGEX, raw, re.IGNORECASE)
         if m:
             try:
+                # Group 1 is the number
                 qty_value = float(m.group(1))
-                qty_index = idx
-                break
             except ValueError:
-                continue
+                # Should not happen if RegEx is good, but good practice
+                continue 
+            
+            qty_index = idx
+            
+            # The item text is everything *before* this token.
+            item_tokens = tokens[:qty_index]
+            item_text = " ".join(item_tokens).strip()
+            
+            # If the quantity and unit were detected *within* a token, 
+            # we must separate the item part from the qty part within that token.
+            if m.start() > 0:
+                item_part_of_token = raw[:m.start()].strip()
+                item_text = item_text + " " + item_part_of_token
+                item_text = item_text.strip() # Clean up leading/trailing spaces
 
-    if qty_index is None or qty_value is None:
-        return None, None
+            if item_text:
+                return item_text, qty_value
+            else:
+                # Quantity found, but no item text to the left/in the same token. Ignore.
+                return None, None
+            
+        # 2. If no unit, look for a standalone number (must be the last token in the row 
+        # for maximum safety, or rely on its position)
+        try:
+            qty_value = float(raw)
+            
+            # If a number is found as a token, it MUST be the last token (or close to it)
+            # We assume if we are searching right-to-left, the last number is the quantity.
+            
+            item_tokens = tokens[:idx]
+            item_text = " ".join(item_tokens).strip()
+            
+            if item_text:
+                return item_text, qty_value
+            
+        except ValueError:
+            pass # Not a number, continue to next token
+    
+    return None, None
 
-    # Everything to the left of the first quantity token is the item
-    item_tokens = tokens[:qty_index]
-    item_text = " ".join(item_tokens).strip()
 
-    if not item_text:
-        return None, None
+# --------------------------------------------------------
+# ITEM NORMALIZATION FUNCTION
+# Includes manual fixes for common OCR/Handwriting errors
+# --------------------------------------------------------
+def normalize_item(name: str) -> str:
+    """Standardizes item names, handles common misspellings/variants."""
+    n = name.lower().strip()
+    
+    # 1. Manual/Fuzzy Fixes for Common OCR Errors (e.g., f instead of t, 'raasted')
+    
+    # Tofu variants (e.g., 'tofo')
+    if "tofu" in n or "tofo" in n:
+        return "Fried Tofu"
 
-    return item_text, qty_value
+    # Broccoli variants (e.g., 'raasted', 'broccoli' used alone)
+    if "broccoli" in n or "brocoli" in n or "raasted" in n:
+        return "Roasted Broccoli"
+    
+    # Soy Glazed Carrots variants (e.g., 'soy' or 'carrots')
+    if "soy" in n and "carrot" in n:
+        return "Soy Glazed Carrots"
+    
+    # Teriyaki Chicken variants (e.g., 'teriyacki')
+    if "teriyaki" in n or "teriyacki" in n or "teriyaki chicken" in n:
+        return "Teriyaki Chicken"
+    
+    # Rice variants (e.g., "Rice" detected alone, assume 'White Rice' if no other type specified)
+    if n == "rice":
+        return "White Rice"
+        
+    return name
 
 
 # --------------------------------------------------------
@@ -228,24 +303,13 @@ def parse_row_tokens(tokens):
 # --------------------------------------------------------
 def parse_ocr_text(full_text: str, word_boxes):
     """
-    Full OCR parsing with bounding boxes:
-
-    - Detects station and date from full text.
-    - Clusters words into rows using Y-coordinates.
-    - For each row, finds first numeric quantity on the right.
-    - Treats everything to the left as item name.
-    - Normalizes item names (punctuation, broccoli synonyms, Title Case).
-    - Fuzzy merges similar items and aggregates quantities.
-    - Returns: aggregated_df, station, debug_df
+    Parses OCR text: Detects header info, clusters rows, extracts items/quantities, 
+    normalizes, fuzzy merges, and aggregates.
     """
 
     station = detect_station_name(full_text)
     date_match = re.search(r"Date\s+(\d{1,2}/\d{1,2}/\d{2,4})", full_text, re.IGNORECASE)
     header_date = date_match.group(1) if date_match else ""
-
-    # Normalize units inside tokens for easier parsing
-    # (we only use this inside parse_row_tokens, so we keep boxes as-is)
-    # The per-token logic there handles #, lb, lbs, pounds etc.
 
     # Cluster words into row groups
     rows = cluster_rows(word_boxes, row_threshold=25)
@@ -254,24 +318,23 @@ def parse_ocr_text(full_text: str, word_boxes):
     debug_rows = []
 
     for row_idx, row_words in enumerate(rows):
-        # Sort each row left→right
+        # Sort each row left→right by X-coordinate
         row_words_sorted = sorted(row_words, key=lambda w: w["cx"])
         tokens = [w["text"] for w in row_words_sorted]
         row_text = " ".join(tokens)
 
-        # Classify row
-        classification = "data"
-        item_candidate = ""
-        qty_candidate = ""
-
         # Skip header-like rows
-        header_keywords = ["station", "time", "item", "quantity", "date"]
+        header_keywords = ["station", "time", "item", "quantity", "date", "lbs"]
         if any(re.search(rf"\b{hk}\b", row_text, re.IGNORECASE) for hk in header_keywords):
-            classification = "header"
+            classification = "header/skip"
+            item_candidate = ""
+            qty_candidate = ""
         else:
             item, qty = parse_row_tokens(tokens)
             if item is None or qty is None:
                 classification = "no_qty"
+                item_candidate = ""
+                qty_candidate = ""
             else:
                 classification = "parsed"
                 item_candidate = item
@@ -288,11 +351,8 @@ def parse_ocr_text(full_text: str, word_boxes):
             }
         )
 
-    # If no rows with quantities, return empty
     if not all_rows:
-        empty_df = pd.DataFrame(
-            columns=["Station", "Date", "Item", "Total Quantity (lbs)"]
-        )
+        empty_df = pd.DataFrame(columns=["Station", "Date", "Item", "Total Quantity (lbs)"])
         debug_df = pd.DataFrame(debug_rows)
         return empty_df, station, debug_df
 
@@ -302,68 +362,60 @@ def parse_ocr_text(full_text: str, word_boxes):
 
     # ---- Item name normalization ----
 
-    # 1) strip trailing punctuation
-    df["Item"] = df["Item"].str.replace(r"[^\w\s]", "", regex=True)
+    # 1) Strip punctuation (keeping hyphens/slashes) and collapse spaces
+    df["Item"] = df["Item"].str.replace(r"[^\w\s-]", "", regex=True)
+    df["Item"] = df["Item"].str.replace(r"\s+", " ", regex=True).str.strip()
 
-    # 2) broccoli-related synonyms + other manual mappings
-    def normalize_item(name: str) -> str:
-        n = name.lower().strip()
-
-        # Broccoli-related variants
-        if n in {"raasted broccoli", "roasted broccoli", "broccoli", "roasted"}:
-            return "Roasted Broccoli"
-
-        return name
-
+    # 2) Apply manual/fuzzy normalization
     df["Item"] = df["Item"].apply(normalize_item)
 
-    # 3) collapse extra spaces and use Title Case
-    df["Item"] = (
-        df["Item"]
-        .str.replace(r"\s+", " ", regex=True)
-        .str.strip()
-        .str.title()
-    )
-
+    # 3) Use Title Case for final presentation
+    df["Item"] = df["Item"].str.title()
+    
     # ----------------------------------------------------
-    # FUZZY + TOKEN MERGING
+    # FUZZY + TOKEN MERGING (REVISED)
+    # The longest, most descriptive name should become the canonical.
     # ----------------------------------------------------
-    unique_items = list(dict.fromkeys(df["Item"].tolist()))  # preserve first-seen order
-    canonicals = []
-    mapping = {}
-    cutoff = 0.87
+    unique_items = list(dict.fromkeys(df["Item"].tolist()))
+    
+    # Sort unique items by length, descending, to prioritize longer names as canonicals
+    sorted_unique_items = sorted(unique_items, key=len, reverse=True) 
+    
+    canonical_items = {} # {canonical_name: [list of variants mapped to it]}
+    
+    for item in sorted_unique_items:
+        best_match = None
+        best_ratio = 0
+        
+        # Check against existing canonicals
+        for canon in canonical_items.keys():
+            # Use SequenceMatcher for character-level similarity
+            ratio = difflib.SequenceMatcher(None, item, canon).ratio()
+            
+            # Use get_close_matches for a standard fuzzy check
+            fuzzy_match = difflib.get_close_matches(item, [canon], n=1, cutoff=0.87)
 
-    for item in unique_items:
-        if not canonicals:
-            canonicals.append(item)
-            mapping[item] = item
-            continue
+            if fuzzy_match and ratio > best_ratio:
+                 best_ratio = ratio
+                 best_match = canon
+            
+            # Logic for word-level overlap: handles "Rice" matching "White Rice"
+            item_tokens = set(item.split())
+            canon_tokens = set(canon.split())
+            if len(item_tokens & canon_tokens) >= 1 and len(item_tokens | canon_tokens) <= 3: 
+                # If they share at least one word and aren't too different in word count
+                best_match = canon
+                break # A strong token match is often better than character ratio
 
-        # 1) Strong character-level similarity
-        match = difflib.get_close_matches(item, canonicals, n=1, cutoff=cutoff)
-        if match:
-            mapping[item] = match[0]
-            continue
-
-        # 2) Word-level overlap, e.g., "Broccoli" vs "Roasted Broccoli"
-        tokens = set(item.split())
-        best_canon = None
-        best_overlap = 0
-
-        for c in canonicals:
-            overlap = len(tokens & set(c.split()))
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_canon = c
-
-        if best_canon and best_overlap > 0:
-            mapping[item] = best_canon
+        if best_match:
+            # Map the current item to the existing canonical
+            df.loc[df['Item'] == item, 'Canonical Item'] = best_match
         else:
-            canonicals.append(item)
-            mapping[item] = item
+            # This item becomes a new canonical
+            canonical_items[item] = True
+            df.loc[df['Item'] == item, 'Canonical Item'] = item
 
-    df["Canonical Item"] = df["Item"].map(mapping)
-
+    # Aggregation
     aggregated = (
         df.groupby(["Date", "Canonical Item"], as_index=False)["Quantity"]
         .sum()
@@ -384,6 +436,7 @@ def parse_ocr_text(full_text: str, word_boxes):
 
 # --------------------------------------------------------
 # FILE UPLOAD SECTION
+# (Streamlit UI remains the same)
 # --------------------------------------------------------
 st.markdown(
     f"""
@@ -398,10 +451,16 @@ uploaded_file = st.file_uploader(
     "Upload image (JPG, JPEG, PNG)", type=["jpg", "jpeg", "png"]
 )
 
+# Initialize variables for the second section's use
+df = pd.DataFrame()
+detected_station = "Unknown"
+upload_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
 if uploaded_file is not None:
     upload_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     with st.spinner("Reading image... please wait"):
+        # The Vision API call is now DOCUMENT_TEXT_DETECTION for better accuracy
         full_text, word_boxes = extract_text_and_boxes(uploaded_file)
 
     st.subheader("OCR Text Preview")
@@ -412,7 +471,7 @@ if uploaded_file is not None:
 
     # Show detected station
     if detected_station and detected_station != "Unknown":
-        st.info(f"Detected Station: {detected_station}")
+        st.info(f"Detected Station: **{detected_station}**")
     else:
         st.warning(
             "Station not clearly detected. Please confirm the station on the original log."
@@ -457,20 +516,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if "df" in locals() and not df.empty:
+# Use the variables set in the 'if uploaded_file is not None' block
+if not df.empty:
     st.success("✅ Aggregated CSV is ready.")
     st.markdown("You can download the file below and email it manually if needed.")
     csv_data = df.to_csv(index=False).encode("utf-8")
 
-    try:
-        safe_station = (detected_station or "UnknownStation").replace(" ", "_")
-    except NameError:
-        safe_station = "UnknownStation"
-
-    try:
-        ts = upload_timestamp
-    except NameError:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_station = (detected_station or "UnknownStation").replace(" ", "_")
+    ts = upload_timestamp
 
     file_name_later = f"{safe_station}_{ts}_dining_log.csv"
 
