@@ -143,26 +143,21 @@ def compute_totals_from_rows(rows_df: pd.DataFrame):
 st.write(
     """
 This application processes Gael Dining tracking sheets and summarizes food items into
-four standardized categories:
-
-- Teriyaki Chicken  
-- Rice  
-- Soy Glazed Carrots  
-- Roasted Broccoli  
-
-Staff can upload a photo of a completed sheet, review the parsed rows, and download a CSV
-with final totals for use in DRIVE or other reporting tools.
+standardized categories.
+ 
+Staff can upload a photo of a completed sheet, review the parsed rows, and email or download a CSV
+with final totals.
 """
 )
 
 st.markdown("---")
 
 uploaded_image = st.file_uploader(
-    "Upload a tracking sheet photo",
+    "Upload your log",
     type=["png", "jpg", "jpeg"],
 )
 
-run_demo = st.button("Process Sheet")
+run_demo = st.button("Process log")
 
 
 # =========================================================
@@ -195,7 +190,7 @@ if run_demo:
 
     st.write(
         """
-        All entries are mapped into the four approved menu items listed above,
+        All entries are normalized and grouped,
         so variations like “broccoli” and “roasted broccoli” are counted together.
         """
     )
