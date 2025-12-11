@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from emailer import send_email_with_attachment
+import os   # <-- DEBUG ADDITION
 
 
 # =========================================================
@@ -22,7 +23,7 @@ st.set_page_config(page_title="SMC Dining OCR", layout="centered")
 load_local_css("assets/theme.css")
 
 st.image("assets/smc_g_logo2.png", width=120)
-st.title("SMC Dining OCR – Presentation Build")
+st.title("SMC Dining OCR")
 
 
 # =========================================================
@@ -93,11 +94,15 @@ if run_demo:
     )
 
     # =========================================================
-    #  Step 3 — Email CSV (FORM FIX APPLIED HERE)
+    #  Step 3 — Email CSV (FORM FIX + DEBUG)
     # =========================================================
     st.markdown("## Step 3 — Email CSV File")
-
     st.info("Use your verified SendGrid sender email: jaw41@stmarys-ca.edu")
+
+    # DEBUG: Show whether the SendGrid key is actually loaded
+    sg_key = os.getenv("SENDGRID_API_KEY")
+    st.caption(f"SENDGRID key loaded: {bool(sg_key)} (length={len(sg_key) if sg_key else 0})")
+    
 
     with st.form("email_form"):
         sender = st.text_input("Sender Email", value="jaw41@stmarys-ca.edu")
