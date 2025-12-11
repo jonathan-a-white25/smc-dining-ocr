@@ -157,7 +157,7 @@ uploaded_image = st.file_uploader(
     type=["png", "jpg", "jpeg"],
 )
 
-run_demo = st.button("Process log")
+run_demo = st.button("Submit photo")
 
 
 # =========================================================
@@ -217,4 +217,4 @@ if run_demo:
     st.success("Processing complete. Totals are ready for export.")
 
 else:
-    st.info("Upload a sheet and click **Process Sheet** to run the workflow.")
+    st.info("Upload a sheet and click **Submit photo** to run the workflow.")
