@@ -1,175 +1,127 @@
+# --------------------------------------------------------
+# SMC Dining OCR — DEMO VERSION (No OCR, Hardcoded Data)
+# Author: Jonathan White
+# Date: December 2025
+# --------------------------------------------------------
+
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from zoneinfo import ZoneInfo
-from emailer import send_email_with_attachment
+import smtplib
+import ssl
+from email.message import EmailMessage
 
+# --------------------------------------------------------
+# PAGE CONFIGURATION
+# --------------------------------------------------------
+st.set_page_config(page_title="SMC Dining OCR", layout="wide")
 
-# =========================================================
-#  CSS Loader
-# =========================================================
-def load_local_css(path: str):
-    try:
-        with open(path) as f:
-            st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-    except:
-        st.warning(f"CSS file not found at: {path}")
+SMC_NAVY = "#002855"
+SMC_RED = "#C8102E"
 
+# Logo path
+logo_path = "assets/smc_g_logo.png"
 
-# =========================================================
-#  Page Setup
-# =========================================================
-st.set_page_config(page_title="SMC Dining OCR", layout="centered")
-load_local_css("assets/theme.css")
-
-st.image("assets/smc_g_logo2.png", width=120)
-st.title("SMC Dining OCR")
-
-
-# =========================================================
-#  STATION LIST
-# =========================================================
-STATIONS = [
-    "Sizzle",
-    "Stacked",
-    "Simple Servings",
-    "Slices",
-    "Twists",
-    "Bliss"
-]
-
-
-# =========================================================
-#  Demo Totals
-# =========================================================
-def get_demo_totals():
-    rows = [
-        ["Teriyaki Chicken", 55, "lbs"],
-        ["Rice", 35, "lbs"],
-        ["Soy Glazed Carrots", 33, "lbs"],
-        ["Roasted Broccoli", 30, "lbs"]
-    ]
-    return pd.DataFrame(rows, columns=["Item", "Total Quantity", "Unit"])
-
-
-# =========================================================
-#  Banner Component
-# =========================================================
-def banner(text, color):
-    st.markdown(
-        f"""
-        <div style="
-            width:100%;
-            background:{color};
-            padding:14px;
-            border-radius:8px;
-            text-align:center;
-            font-weight:600;
-            font-size:20px;
-            color:white;
-            margin-top:20px;
-            margin-bottom:10px;">
-            {text}
+# --------------------------------------------------------
+# TOP BANNER
+# --------------------------------------------------------
+st.markdown(
+    f"""
+    <div style="background-color:{SMC_NAVY};padding:15px 25px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+            <h1 style="color:white;margin-bottom:4px;">📋 SMC Dining OCR (Demo)</h1>
+            <p style="color:white;margin-top:0;font-size:16px;">Built by Jonathan White · Demo Version (Hardcoded Data)</p>
         </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-# =========================================================
-#  STEP 1
-# =========================================================
-banner("Step 1 — Upload Your Tracking Log", "#B3001B")
-
-station_name = st.selectbox("Select Meal Station:", STATIONS, index=0)
-
-uploaded_image = st.file_uploader(
-    "Upload tracking sheet image (JPG, JPEG, PNG)",
-    type=["png", "jpg", "jpeg"]
+        <img src="{logo_path}" width="80" style="border-radius:6px;margin-left:10px;">
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
-run_demo = st.button("Process Log")
+st.markdown("<br>", unsafe_allow_html=True)
 
+st.write("""
+This demo displays **pre-loaded food production data** and sends a CSV summary by email.
+No OCR is used.  
+""")
 
-# =========================================================
-#  MAIN LOGIC — EVERYTHING BELOW REQUIRES run_demo
-# =========================================================
-if run_demo:
+# --------------------------------------------------------
+# HARDCODED DATA FOR DEMO
+# --------------------------------------------------------
+def get_demo_df():
+    data = [
+        {"Item": "Teriyaki Chicken", "Total Quantity (lbs)": 55},
+        {"Item": "Rice", "Total Quantity (lbs)": 35},
+        {"Item": "Soy Glazed Carrots", "Total Quantity (lbs)": 33},
+        {"Item": "Roasted Broccoli", "Total Quantity (lbs)": 30},
+    ]
+    return pd.DataFrame(data)
 
-    # STEP 2
-    banner("Step 2 — Review Grouped Totals", "#002B5C")
+df = get_demo_df()
 
-    totals_df = get_demo_totals()
-    st.dataframe(totals_df, use_container_width=True)
+# --------------------------------------------------------
+# DISPLAY DEMO DATA
+# --------------------------------------------------------
+st.markdown(f"""
+<div style='background-color:{SMC_RED};padding:10px;border-radius:6px;'>
+<h3 style='color:white;text-align:center;margin:0;'>Demo Data Preview</h3>
+</div>
+""", unsafe_allow_html=True)
 
-    pt = datetime.now(ZoneInfo("America/Los_Angeles"))
-    date_str = pt.strftime("%Y-%m-%d")
-    time_str = pt.strftime("%H-%M-%S")
+st.dataframe(df, use_container_width=True)
 
-    station_clean = station_name.replace(" ", "-")
-    filename = f"{station_clean}_{date_str}_{time_str}.csv"
-    csv_bytes = totals_df.to_csv(index=False).encode("utf-8")
+csv_bytes = df.to_csv(index=False).encode("utf-8")
 
-    st.download_button(
-        label=f"Download CSV ({filename})",
-        data=csv_bytes,
-        file_name=filename,
-        mime="text/csv"
+# --------------------------------------------------------
+# EMAIL SENDING FUNCTION
+# --------------------------------------------------------
+def send_email_with_attachment(recipient, note_text, csv_bytes):
+    sender = st.secrets["gmail"]["email"]
+    app_pw = st.secrets["gmail"]["app_password"]
+
+    msg = EmailMessage()
+    msg["From"] = sender
+    msg["To"] = recipient
+    msg["Subject"] = "SMC Dining OCR Demo Report"
+
+    body = note_text if note_text else "Attached is the SMC Dining OCR demo report."
+    msg.set_content(body)
+
+    msg.add_attachment(
+        csv_bytes,
+        maintype="text",
+        subtype="csv",
+        filename="smc_dining_demo_report.csv"
     )
 
+    context = ssl.create_default_context()
 
-    # STEP 3 — MUST BE INSIDE run_demo
-    banner("Step 3 — Email the CSV File", "#1E7F3B")
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+        server.login(sender, app_pw)
+        server.send_message(msg)
 
-    st.info("Use your verified SendGrid sender email: jon.whitea@gmail.com")
+# --------------------------------------------------------
+# EMAIL UI
+# --------------------------------------------------------
+st.markdown("<br>", unsafe_allow_html=True)
+st.markdown(
+    f"""
+    <div style='background-color:{SMC_NAVY};padding:10px;border-radius:6px;'>
+        <h3 style='color:white;text-align:center;margin:0;'>Send Demo CSV</h3>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 
-    api_key_exists = bool(st.secrets.get("SENDGRID_API_KEY"))
-    st.caption(f"SENDGRID key loaded: {api_key_exists}")
+recipient_email = st.text_input("Recipient Email:", value="jon.whitea@gmail.com")
+note_text = st.text_area("Optional Note:", placeholder="Example: Lunch prep totals for today.")
 
-    with st.form("email_form"):
-        sender = st.text_input("Sender Email", value="jon.whitea@gmail.com")
-        recipient = st.text_input("Recipient Email")
-        notes = st.text_area("Optional Notes", value="Thank you! Please review today's log.")
+if st.button("📤 Send CSV Now", use_container_width=True):
+    try:
+        send_email_with_attachment(recipient_email, note_text, csv_bytes)
+        st.success(f"Email sent to {recipient_email} successfully!")
+    except Exception as e:
+        st.error(f"Email failed: {e}")
 
-        submit_email = st.form_submit_button("Send CSV via Email")
-
-        if submit_email:
-
-            st.write("Button press detected.")  # DEBUG
-
-            if not sender or not recipient:
-                st.error("Both sender and recipient are required.")
-
-            else:
-                st.write("Attempting to send email...")  # DEBUG
-
-                subject = f"{station_name} Log – {date_str} ({time_str} PT)"
-
-                body = (
-                    f"Hello,\n\n"
-                    f"Attached is the meal log for the {station_name} station.\n"
-                    f"- Date: {date_str}\n"
-                    f"- Time: {time_str} PT\n\n"
-                    f"{notes}\n\n"
-                    f"Sent automatically by the SMC Dining OCR system."
-                )
-
-                ok, msg = send_email_with_attachment(
-                    sender=sender,
-                    recipient=recipient,
-                    subject=subject,
-                    body_text=body,
-                    attachment_bytes=csv_bytes,
-                    attachment_name=filename
-                )
-
-                st.write("Email send function response:", msg)
-
-                if ok:
-                    st.success(f"Email sent successfully to {recipient}!")
-                else:
-                    st.error(f"EMAIL FAILED: {msg}")
-
-
-else:
-    st.info("Upload a sheet and click **Process Log** to begin.")
+# FOOTER
+st.markdown("<br><hr>", unsafe_allow_html=True)
+st.caption("Saint Mary’s College Dining Data Project · Team 1")
