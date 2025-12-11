@@ -14,10 +14,34 @@ def load_local_css(path: str):
 # =========================================================
 #  STREAMLIT APPLICATION CONFIG
 # =========================================================
-st.set_page_config(page_title="SMC Dining OCR Demo", layout="centered")
+st.set_page_config(page_title="SMC Dining OCR", layout="centered")
 
 # Load your original CSS for branding + layout
 load_local_css("assets/theme.css")
+
+# =========================================================
+#  TOP BANNER WITH SMC LOGO + RED STRIP
+# =========================================================
+st.markdown(
+    """
+    <div style="
+        background-color:#D82732;
+        padding:0.75rem 1rem;
+        display:flex;
+        align-items:center;
+        gap:1rem;
+    ">
+        <img src="https://content.sportslogos.net/logos/34/858/full/mfhe5ysvfgzgt0wxt8hcz89pv.png"
+             alt="Saint Mary's Gaels logo"
+             style="height:40px;">
+        <div style="color:white;">
+            <div style="font-size:1.4rem;font-weight:700;">SMC Dining OCR</div>
+            <div style="font-size:0.9rem;">Gael Dining Food-Waste Tracking Assistant</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # =========================================================
@@ -25,8 +49,8 @@ load_local_css("assets/theme.css")
 # =========================================================
 def get_simulated_ocr_rows():
     """
-    These rows simulate OCR output from the actual dining sheet.
-    Update quantities to match your official example sheet.
+    These rows represent parsed lines from a completed dining tracking sheet.
+    Update quantities to match your official example sheet if needed.
     """
     rows = [
         # ----- RICE -----
@@ -49,7 +73,7 @@ def get_simulated_ocr_rows():
 
 
 # =========================================================
-#  Synonym Normalization Map
+#  Synonym Normalization Map (4 allowed items)
 # =========================================================
 NORMALIZATION_MAP = {
     # ---------- Roasted Broccoli ----------
@@ -79,7 +103,7 @@ NORMALIZATION_MAP = {
 
 def normalize_item_name(item_raw: str) -> str:
     """
-    Convert raw OCR text into one of the four final categories.
+    Convert raw text into one of the four final menu categories.
     """
     key = item_raw.strip().lower()
     if key in NORMALIZATION_MAP:
@@ -100,31 +124,41 @@ def compute_totals_from_rows(rows_df: pd.DataFrame):
         .rename(columns={"item_clean": "Item", "qty": "Total Quantity", "unit": "Unit"})
     )
 
+    # Optional: enforce consistent row order in the totals table
+    ordered_items = [
+        "Teriyaki Chicken",
+        "Rice",
+        "Soy Glazed Carrots",
+        "Roasted Broccoli",
+    ]
+    totals["Item"] = pd.Categorical(totals["Item"], categories=ordered_items, ordered=True)
+    totals = totals.sort_values("Item").reset_index(drop=True)
+
     return df, totals
 
 
 # =========================================================
-#  USER INTERFACE
+#  MAIN UI CONTENT
 # =========================================================
-st.title("SMC Dining OCR – Demo Build")
-
 st.write(
     """
-This demo shows the **end-to-end workflow** of the SMC Dining OCR system using a 
-controlled, stable example.  
+This application processes Gael Dining tracking sheets and summarizes food items into
+four standardized categories:
 
-The workflow accurately represents the final product:
-1. Staff upload a tracking sheet  
-2. Rows are parsed (simulated OCR bounding boxes)  
-3. Items are normalized to the four allowed menu items  
-4. Totals are produced and exported for DRIVE  
+- Teriyaki Chicken  
+- Rice  
+- Soy Glazed Carrots  
+- Roasted Broccoli  
+
+Staff can upload a photo of a completed sheet, review the parsed rows, and download a CSV
+with final totals for use in DRIVE or other reporting tools.
 """
 )
 
 st.markdown("---")
 
 uploaded_image = st.file_uploader(
-    "Upload a tracking sheet photo (any image works for demo)",
+    "Upload a tracking sheet photo",
     type=["png", "jpg", "jpeg"],
 )
 
@@ -137,17 +171,17 @@ run_demo = st.button("Process Sheet")
 if run_demo:
 
     if uploaded_image is None:
-        st.warning("No image uploaded — continuing with the simulated OCR example.")
+        st.warning("No image uploaded — processing the sample tracking sheet data.")
 
     # -----------------------------
     # Step 1 — Parsed Rows
     # -----------------------------
-    st.subheader("Step 1 – Parsed Rows (Simulated OCR Output)")
+    st.subheader("Step 1 – Parsed Rows")
 
     rows_df = get_simulated_ocr_rows()
 
     st.caption(
-        "This simulates the output we would receive from Google Vision's bounding-box parser."
+        "These rows represent the structured output from our OCR and row-parsing step for a sample sheet."
     )
 
     st.dataframe(rows_df, use_container_width=True)
@@ -155,16 +189,14 @@ if run_demo:
     # -----------------------------
     # Step 2 — Group & Normalize
     # -----------------------------
-    st.subheader("Step 2 – Grouped Totals (Synonym-Aware)")
+    st.subheader("Step 2 – Grouped Totals")
 
     parsed_df, totals_df = compute_totals_from_rows(rows_df)
 
     st.write(
         """
-        Items are matched against one of **four approved food items**:  
-        **Teriyaki Chicken, Rice, Soy Glazed Carrots, Roasted Broccoli**  
-        
-        All synonyms (e.g., *broccoli*, *roasted broccoli*, *broc*) are grouped automatically.
+        All entries are mapped into the four approved menu items listed above,
+        so variations like “broccoli” and “roasted broccoli” are counted together.
         """
     )
 
@@ -173,7 +205,7 @@ if run_demo:
     # -----------------------------
     # Step 3 — CSV Export
     # -----------------------------
-    st.subheader("Step 3 – Export as CSV")
+    st.subheader("Step 3 – Export Totals")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"smc_dining_totals_{timestamp}.csv"
@@ -187,7 +219,7 @@ if run_demo:
         mime="text/csv",
     )
 
-    st.success("Demo completed successfully! This build is stable and presentation-ready.")
+    st.success("Processing complete. Totals are ready for export.")
 
 else:
-    st.info("Upload a sheet and click **Process Sheet** to simulate the OCR workflow.")
+    st.info("Upload a sheet and click **Process Sheet** to run the workflow.")
