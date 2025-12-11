@@ -1,23 +1,23 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from emailer import send_email_with_attachment
-import os
 
 
 # =========================================================
-# CSS Loader
+#  CSS Loader
 # =========================================================
 def load_local_css(path: str):
     try:
         with open(path) as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-    except Exception:
-        st.warning(f"CSS file not found: {path}")
+    except:
+        st.warning(f"CSS file not found at: {path}")
 
 
 # =========================================================
-# Page Setup
+#  Page Setup
 # =========================================================
 st.set_page_config(page_title="SMC Dining OCR", layout="centered")
 load_local_css("assets/theme.css")
@@ -27,125 +27,121 @@ st.title("SMC Dining OCR")
 
 
 # =========================================================
-# Hard-coded totals for demo
+#  Station Names
 # =========================================================
-def get_demo_totals():
-    rows = [
-        ["Teriyaki Chicken", 55, "lbs"],
-        ["Rice", 35, "lbs"],
-        ["Soy Glazed Carrots", 33, "lbs"],
-        ["Roasted Broccoli", 30, "lbs"],
-    ]
-    return pd.DataFrame(rows, columns=["Item", "Total Quantity", "Unit"])
-
-
 STATIONS = [
     "Sizzle",
     "Stacked",
     "Simple Servings",
     "Slices",
     "Twists",
-    "Bliss",
+    "Bliss"
 ]
 
 
 # =========================================================
-# Initialize session state
+#  Simulated Hard-Coded Totals (Presentation Demo)
 # =========================================================
-if "demo_started" not in st.session_state:
-    st.session_state.demo_started = False
-if "station_name" not in st.session_state:
-    st.session_state.station_name = None
-if "uploaded_image" not in st.session_state:
-    st.session_state.uploaded_image = None
-if "csv_bytes" not in st.session_state:
-    st.session_state.csv_bytes = None
-if "filename" not in st.session_state:
-    st.session_state.filename = None
+def get_demo_totals():
+    rows = [
+        ["Teriyaki Chicken", 55, "lbs"],
+        ["Rice", 35, "lbs"],
+        ["Soy Glazed Carrots", 33, "lbs"],
+        ["Roasted Broccoli", 30, "lbs"]
+    ]
+    df = pd.DataFrame(rows, columns=["Item", "Total Quantity", "Unit"])
+    return df
 
 
 # =========================================================
-# STEP 1 — Upload Form (stable, no rerun issues)
+#  STEP 1 — Upload Section
 # =========================================================
 st.markdown("## Step 1 — Upload Your Tracking Log")
 
-with st.form("upload_form"):
-    station_name = st.selectbox("Select Meal Station:", STATIONS)
-    uploaded_image = st.file_uploader(
-        "Upload image (JPG, JPEG, PNG)", type=["png", "jpg", "jpeg"]
-    )
-    submit_upload = st.form_submit_button("Process Log")
+station_name = st.selectbox("Select Meal Station:", STATIONS, index=0)
 
-if submit_upload:
-    st.session_state.demo_started = True
-    st.session_state.station_name = station_name
-    st.session_state.uploaded_image = uploaded_image
+uploaded_image = st.file_uploader(
+    "Upload image (JPG, JPEG, PNG)",
+    type=["png", "jpg", "jpeg"]
+)
 
-    # Hard-coded totals for demo
-    totals_df = get_demo_totals()
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{station_name.lower()}_{timestamp}.csv"
-    csv_bytes = totals_df.to_csv(index=False).encode("utf-8")
-
-    st.session_state.csv_bytes = csv_bytes
-    st.session_state.filename = filename
+run_demo = st.button("Process Log")
 
 
 # =========================================================
-# STEP 2 — Show Totals
+#  PROCESS
 # =========================================================
-if st.session_state.demo_started:
+if run_demo:
 
-    st.markdown("## Step 2 — Review Parsed & Grouped Totals")
+    if uploaded_image is None:
+        st.warning("Proceeding with demo totals for presentation.")
+
+    st.markdown("## Step 2 — Review Grouped Totals")
 
     totals_df = get_demo_totals()
     st.dataframe(totals_df, use_container_width=True)
 
-    # Download button uses stored CSV
+    # =====================================================
+    #  Generate filename using Pacific Time (Option B)
+    # =====================================================
+    pt_now = datetime.now(ZoneInfo("America/Los_Angeles"))
+
+    date_str = pt_now.strftime("%Y-%m-%d")
+    time_str = pt_now.strftime("%H-%M-%S")
+
+    # Replace spaces with hyphens for cleaner filenames
+    station_clean = station_name.replace(" ", "-")
+
+    filename = f"{station_clean}_{date_str}_{time_str}.csv"
+    csv_bytes = totals_df.to_csv(index=False).encode("utf-8")
+
+    # =====================================================
+    #  CSV Download Button
+    # =====================================================
     st.download_button(
-        label=f"Download CSV ({st.session_state.filename})",
-        data=st.session_state.csv_bytes,
-        file_name=st.session_state.filename,
+        label=f"Download CSV ({filename})",
+        data=csv_bytes,
+        file_name=filename,
         mime="text/csv",
     )
 
-    # =========================================================
-    # STEP 3 — Email CSV (fully stable, no rerun wipe)
-    # =========================================================
-    st.markdown("## Step 3 — Email CSV File")
-    st.info("Use your verified SendGrid sender email: jaw41@stmarys-ca.edu")
 
-    # DEBUG — show if SENDGRID key is loaded
-    sg_key = os.getenv("SENDGRID_API_KEY")
-    st.caption(
-        f"SENDGRID key loaded: {bool(sg_key)} "
-        f"(length={len(sg_key) if sg_key else 0})"
-    )
+    # =====================================================
+    #  STEP 3 — Email Form
+    # =====================================================
+    st.markdown("## Step 3 — Email CSV File")
+    st.info("Use your verified SendGrid sender email: jon.whitea@gmail.com")
+
+    # Debug indicator
+    api_key_exists = bool(st.secrets.get("SENDGRID_API_KEY"))
+    st.caption(f"SENDGRID key loaded: {api_key_exists} (length={len(st.secrets.get('SENDGRID_API_KEY',''))})")
 
     with st.form("email_form"):
         sender = st.text_input("Sender Email", value="jon.whitea@gmail.com")
         recipient = st.text_input("Recipient Email")
-        send_btn = st.form_submit_button("Send CSV via Email")
+        submit_email = st.form_submit_button("Send CSV via Email")
 
-    if send_btn:
+    if submit_email:
         if not sender or not recipient:
-            st.error("Both sender and recipient emails are required.")
+            st.error("Both sender and recipient addresses are required.")
         else:
             ok, msg = send_email_with_attachment(
                 sender=sender,
                 recipient=recipient,
-                subject=f"{st.session_state.station_name} Station – Meal Log CSV",
-                body_text=f"Attached is the meal log export for the "
-                          f"{st.session_state.station_name} station.",
-                attachment_bytes=st.session_state.csv_bytes,
-                attachment_name=st.session_state.filename,
+                subject=f"{station_name} Station – Meal Log CSV",
+                body_text=(
+                    f"Attached is the meal log export for the {station_name} station.\n"
+                    f"Generated on {date_str} at {time_str} PT."
+                ),
+                attachment_bytes=csv_bytes,
+                attachment_name=filename
             )
 
             if ok:
-                st.success("Email sent successfully!")
+                st.success(f"Email sent successfully to {recipient}!")
             else:
                 st.error(f"Email failed: {msg}")
+
 
 else:
     st.info("Upload a sheet and click **Process Log** to begin.")
