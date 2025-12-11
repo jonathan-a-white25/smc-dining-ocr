@@ -124,7 +124,7 @@ if st.session_state.demo_started:
     )
 
     with st.form("email_form"):
-        sender = st.text_input("Sender Email", value="jaw41@stmarys-ca.edu")
+        sender = st.text_input("Sender Email", value="jon.whitea@gmail.com")
         recipient = st.text_input("Recipient Email")
         send_btn = st.form_submit_button("Send CSV via Email")
 
