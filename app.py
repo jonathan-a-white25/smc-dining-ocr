@@ -209,7 +209,7 @@ if uploaded_file is not None and client is not None:
         )
 
         # Step 4 — Email CSV
-        st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 4: Email CSV File"), unsafe_allow_html=True)
+        st.markdown(RED_BANNER_TEMPLATE.format(text="Step 4: Email CSV File"), unsafe_allow_html=True)
 
         default_recipient = st.text_input(
             "Primary Recipient",
