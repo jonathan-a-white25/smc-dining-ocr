@@ -50,7 +50,7 @@ st.markdown(
     </style>
 
     <div class="full-width-banner">
-        <img src="assets/smc_g_logo.png">
+        <img src="assets/smc_g_logo2.png">
         <div class="full-width-banner-title">SMC Dining OCR</div>
     </div>
     """,
