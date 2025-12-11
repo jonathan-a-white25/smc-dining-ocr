@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from emailer import send_email_with_attachment
-import os   # <-- DEBUG ADDITION
+import os
 
 
 # =========================================================
@@ -27,20 +27,13 @@ st.title("SMC Dining OCR")
 
 
 # =========================================================
-#  Station Names
+#  Stations
 # =========================================================
-STATIONS = [
-    "Sizzle",
-    "Stacked",
-    "Simple Servings",
-    "Slices",
-    "Twists",
-    "Bliss"
-]
+STATIONS = ["Sizzle", "Stacked", "Simple Servings", "Slices", "Twists", "Bliss"]
 
 
 # =========================================================
-#  Simulated Hard-Coded Totals For Tomorrow's Demo
+#  Hard-coded demo totals
 # =========================================================
 def get_demo_totals():
     rows = [
@@ -49,39 +42,37 @@ def get_demo_totals():
         ["Soy Glazed Carrots", 33, "lbs"],
         ["Roasted Broccoli", 30, "lbs"]
     ]
-    df = pd.DataFrame(rows, columns=["Item", "Total Quantity", "Unit"])
-    return df
+    return pd.DataFrame(rows, columns=["Item", "Total Quantity", "Unit"])
 
 
 # =========================================================
-#  Main UI – Step 1
+#  STEP 1 — Upload Form (STABLE)
 # =========================================================
 st.markdown("## Step 1 — Upload Your Tracking Log")
 
-station_name = st.selectbox("Select Meal Station:", STATIONS, index=0)
+with st.form("upload_form"):
+    station_name = st.selectbox("Select Meal Station:", STATIONS, index=0)
 
-uploaded_image = st.file_uploader(
-    "Upload image (JPG, JPEG, PNG)",
-    type=["png", "jpg", "jpeg"]
-)
+    uploaded_image = st.file_uploader(
+        "Upload image (JPG, JPEG, PNG)",
+        type=["png", "jpg", "jpeg"]
+    )
 
-run_demo = st.button("Process Log")
-
+    run_demo = st.form_submit_button("Process Log")
 
 # =========================================================
-#  Run Demo
+#  If user submits upload form
 # =========================================================
 if run_demo:
 
     if uploaded_image is None:
-        st.warning("Proceeding with the demo sheet totals for tomorrow's presentation.")
+        st.warning("No image uploaded — using demo sheet totals for tomorrow's presentation.")
 
     st.markdown("## Step 2 — Review Parsed & Grouped Totals")
-
     totals_df = get_demo_totals()
     st.dataframe(totals_df, use_container_width=True)
 
-    # Create CSV
+    # CSV creation
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{station_name.lower()}_{timestamp}.csv"
     csv_bytes = totals_df.to_csv(index=False).encode("utf-8")
@@ -94,22 +85,21 @@ if run_demo:
     )
 
     # =========================================================
-    #  Step 3 — Email CSV (FORM FIX + DEBUG)
+    #  STEP 3 — Email CSV (ALREADY FIXED WITH FORM)
     # =========================================================
     st.markdown("## Step 3 — Email CSV File")
     st.info("Use your verified SendGrid sender email: jaw41@stmarys-ca.edu")
 
-    # DEBUG: Show whether the SendGrid key is actually loaded
-    sg_key = os.getenv("SENDGRID_API_KEY")
-    st.caption(f"SENDGRID key loaded: {bool(sg_key)} (length={len(sg_key) if sg_key else 0})")
-    
+    # DEBUG — Check if SendGrid key loads
+    key = os.getenv("SENDGRID_API_KEY")
+    st.caption(f"SENDGRID key loaded: {bool(key)} (length={len(key) if key else 0})")
 
     with st.form("email_form"):
         sender = st.text_input("Sender Email", value="jaw41@stmarys-ca.edu")
         recipient = st.text_input("Recipient Email")
-        submit_email = st.form_submit_button("Send CSV via Email")
+        send_email_button = st.form_submit_button("Send CSV via Email")
 
-    if submit_email:
+    if send_email_button:
         if not sender or not recipient:
             st.error("Both sender and recipient emails are required.")
         else:
