@@ -15,7 +15,7 @@ logo_base64 = get_base64_image("assets/smc_g_logo2.png")
 # =========================================================
 #  Page Setup
 # =========================================================
-st.set_page_config(page_title="SMC Dining OCR – Prototype", layout="centered")
+st.set_page_config(page_title="SMC Dining OCR", layout="centered")
 
 # =========================================================
 #  Banner Styling (with embedded base64 logo)
@@ -30,7 +30,7 @@ RED_BANNER = f"""
     align-items: center;
 ">
     <img src="data:image/png;base64,{logo_base64}" style="height:60px; margin-right:20px;">
-    <h1 style="color:white; margin:0; font-size:32px;">SMC Dining OCR – Prototype</h1>
+    <h1 style="color:white; margin:0; font-size:32px;">SMC Dining OCR</h1>
 </div>
 """
 
@@ -63,7 +63,7 @@ st.markdown(RED_BANNER, unsafe_allow_html=True)
 
 st.write(
     "Upload a photo of the tracking sheet. The app will run OCR, show the raw text, "
-    "and display a parsed summary (prototype output)."
+    "and display a parsed summary."
 )
 
 # =========================================================
@@ -127,7 +127,7 @@ if uploaded_file is not None and client is not None:
         st.text_area("Raw OCR Output", raw_text, height=220)
 
         # STEP 2
-        st.markdown(RED_BANNER_TEMPLATE.format(text="Step 2: Parsed Items (Prototype Output)"), unsafe_allow_html=True)
+        st.markdown(RED_BANNER_TEMPLATE.format(text="Step 2: Parsed Items"), unsafe_allow_html=True)
 
         st.write("Below is the summarized output the system is designed to produce:")
 
