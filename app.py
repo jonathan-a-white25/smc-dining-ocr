@@ -115,17 +115,18 @@ def detect_station_name(text: str) -> str:
 
 
 # --------------------------------------------------------
-# MAIN PARSER
+# MAIN PARSER (NO MERGE STEP)
 # --------------------------------------------------------
 def parse_ocr_text(text: str):
     """
-    Full OCR parsing with:
-    - Unit normalization (10#, 10lbs, 10 pounds → 10 lbs)
-    - OCR fragment merging (A2 rule: both lines ≤ 2 words after punctuation)
-    - FIFO item queue for quantity pairing
-    - Synonym normalization (broccoli family)
-    - Fuzzy + token-based aggregation
-    - Debug info
+    OCR text parser for dining logs.
+
+    - Detects station + date.
+    - Normalizes units (#, lb, lbs, pounds → 'lbs').
+    - Uses FIFO queue to associate item-only lines with following qty-only lines.
+    - Normalizes item names (punctuation, broccoli synonyms, title case).
+    - Uses fuzzy + token-based grouping to merge misspellings.
+    - Returns: aggregated_df, station, debug_df
     """
 
     # ---- Station + Date ----
@@ -150,54 +151,6 @@ def parse_ocr_text(text: str):
     )
 
     cleaned_lines = [ln.rstrip("\n") for ln in cleaned.splitlines()]
-
-    # ----------------------------------------------------
-    # MERGE BROKEN OCR FRAGMENTS (A2 rule, BEFORE fuzzy)
-    # Merge adjacent item-only lines only if BOTH have ≤ 2 words
-    # after stripping punctuation. This handles:
-    #   Roasted / Broccoli. → Roasted Broccoli
-    #   Fried / Tofu → Fried Tofu
-    # but NOT:
-    #   Soy Glazed Carrots. / Teriyaki Chicken
-    # ----------------------------------------------------
-    merged_lines = []
-    i = 0
-    while i < len(cleaned_lines):
-        curr = cleaned_lines[i].strip()
-
-        # Skip empty lines outright
-        if not curr:
-            i += 1
-            continue
-
-        # Try merging with the next non-empty line
-        if i < len(cleaned_lines) - 1:
-            nxt = cleaned_lines[i + 1].strip()
-
-            if nxt:
-                # strip punctuation for word-count check
-                curr_clean_for_words = re.sub(r"[^\w\s]", "", curr)
-                nxt_clean_for_words = re.sub(r"[^\w\s]", "", nxt)
-
-                curr_words = curr_clean_for_words.split()
-                nxt_words = nxt_clean_for_words.split()
-
-                if (
-                    len(curr_words) > 0
-                    and len(curr_words) <= 2
-                    and len(nxt_words) > 0
-                    and len(nxt_words) <= 2
-                ):
-                    # Both lines are short "food words": merge
-                    merged_lines.append(curr + " " + nxt)
-                    i += 2
-                    continue
-
-        # Default: keep line as-is
-        merged_lines.append(curr)
-        i += 1
-
-    cleaned_lines = merged_lines
 
     # ----------------------------------------------------
     # PATTERNS FOR CLASSIFICATION
@@ -319,19 +272,13 @@ def parse_ocr_text(text: str):
     # BUILD WORKING DATAFRAME
     # ----------------------------------------------------
     df = pd.DataFrame(rows, columns=["Date", "Item", "Quantity"])
-
-    # Remove stray 'lbs' from item, standardize spacing
-    df["Item"] = (
-        df["Item"]
-        .str.replace(r"\d+\s*lbs", "", regex=True)
-        .str.replace(r"\blbs\b", "", regex=True, case=False)
-        .str.strip()
-    )
     df["Quantity"] = df["Quantity"].astype(float)
 
-    # ----------------------------------------------------
-    # SYNONYM NORMALIZATION (BROCCOLI FAMILY, ETC.)
-    # ----------------------------------------------------
+    # ---- Item name normalization ----
+    # 1) strip trailing punctuation
+    df["Item"] = df["Item"].str.replace(r"[^\w\s]", "", regex=True)
+
+    # 2) broccoli-related synonyms + other manual mappings
     def normalize_item(name: str) -> str:
         n = name.lower().strip()
 
@@ -343,8 +290,13 @@ def parse_ocr_text(text: str):
 
     df["Item"] = df["Item"].apply(normalize_item)
 
-    # Title Case for final item labels (your choice 1)
-    df["Item"] = df["Item"].str.title()
+    # 3) collapse extra spaces and use Title Case
+    df["Item"] = (
+        df["Item"]
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+        .str.title()
+    )
 
     # ----------------------------------------------------
     # FUZZY + TOKEN MERGING
@@ -445,7 +397,7 @@ if uploaded_file is not None:
 
     # Debug view
     with st.expander("Debug: OCR line parsing (temporary)"):
-        st.write("Each merged OCR line and how the parser classified it:")
+        st.write("Each OCR line and how the parser classified it:")
         st.dataframe(debug_df, use_container_width=True)
 
     if not df.empty:
