@@ -4,7 +4,7 @@ from datetime import datetime
 
 
 # =========================================================
-#  CSS Loader (Original styling from assets/styles.css)
+#  CSS Loader (loads Original styling from assets/theme.css)
 # =========================================================
 def load_local_css(path: str):
     with open(path) as f:
@@ -12,17 +12,24 @@ def load_local_css(path: str):
 
 
 # =========================================================
+#  STREAMLIT APPLICATION CONFIG
+# =========================================================
+st.set_page_config(page_title="SMC Dining OCR Demo", layout="centered")
+
+# Load your original CSS for branding + layout
+load_local_css("assets/theme.css")
+
+
+# =========================================================
 #  Simulated Bounding-Box OCR Output
-#  (This ALWAYS works — safe for presentation)
 # =========================================================
 def get_simulated_ocr_rows():
     """
     These rows simulate OCR output from the actual dining sheet.
     Update quantities to match your official example sheet.
     """
-
     rows = [
-        # ----- RICE EXAMPLE -----
+        # ----- RICE -----
         {"row_id": 1, "item_raw": "rice", "qty": 10, "unit": "lbs"},
         {"row_id": 2, "item_raw": "rice", "qty": 10, "unit": "lbs"},
 
@@ -38,7 +45,6 @@ def get_simulated_ocr_rows():
         {"row_id": 7, "item_raw": "teriyaki chicken", "qty": 12, "unit": "lbs"},
         {"row_id": 8, "item_raw": "chicken", "qty": 8, "unit": "lbs"},
     ]
-
     return pd.DataFrame(rows)
 
 
@@ -98,13 +104,8 @@ def compute_totals_from_rows(rows_df: pd.DataFrame):
 
 
 # =========================================================
-#  STREAMLIT APPLICATION
+#  USER INTERFACE
 # =========================================================
-st.set_page_config(page_title="SMC Dining OCR Demo", layout="centered")
-
-# Load your original CSS for branding + layout
-load_local_css("assets/styles.css")
-
 st.title("SMC Dining OCR – Demo Build")
 
 st.write(
@@ -112,7 +113,7 @@ st.write(
 This demo shows the **end-to-end workflow** of the SMC Dining OCR system using a 
 controlled, stable example.  
 
-Even though we are not calling live OCR here, the workflow accurately represents the final product:
+The workflow accurately represents the final product:
 1. Staff upload a tracking sheet  
 2. Rows are parsed (simulated OCR bounding boxes)  
 3. Items are normalized to the four allowed menu items  
