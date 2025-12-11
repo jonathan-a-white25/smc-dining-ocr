@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import base64
 
 # Import your email module
 from emailer import send_email_with_attachment
@@ -15,19 +16,30 @@ def load_local_css(path: str):
 
 
 # =========================================================
+#  Load image as Base64 (WILL ALWAYS WORK)
+# =========================================================
+def load_image_base64(path):
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
+# =========================================================
 #  APP CONFIG
 # =========================================================
 st.set_page_config(page_title="SMC Dining OCR", layout="wide")
 load_local_css("assets/theme.css")
 
+# Load your SMC logo into base64
+logo_base64 = load_image_base64("assets/smc_g_logo2.png")
+
 
 # =========================================================
-#  TOP FULL-WIDTH RED BANNER WITH LOCAL LOGO
+#  TOP FULL-WIDTH RED BANNER WITH EMBEDDED LOGO
 # =========================================================
 st.markdown(
-    """
+    f"""
     <style>
-        .full-width-banner {
+        .full-width-banner {{
             width: 100% !important;
             margin: 0 !important;
             padding: 1.25rem 1rem;
@@ -35,22 +47,22 @@ st.markdown(
             display:flex;
             align-items:center;
             gap:1rem;
-        }
-        .full-width-banner img {
+        }}
+        .full-width-banner img {{
             height: 45px;
-        }
-        .full-width-banner-title {
-            color: white;
-            font-size: 1.5rem;
-            font-weight: 700;
-        }
-        .stApp {
+        }}
+        .full-width-banner-title {{
+            color:white;
+            font-size:1.5rem;
+            font-weight:700;
+        }}
+        .stApp {{
             padding-top: 0 !important;
-        }
+        }}
     </style>
 
     <div class="full-width-banner">
-        <img src="assets/smc_g_logo2.png">
+        <img src="data:image/png;base64,{logo_base64}">
         <div class="full-width-banner-title">SMC Dining OCR</div>
     </div>
     """,
@@ -59,12 +71,12 @@ st.markdown(
 
 
 # =========================================================
-#  HARD-CODED TOTALS FOR PRESENTATION
+#  HARD-CODED TOTALS FOR DEMO
 # =========================================================
-def compute_totals(_df_ignored):
+def compute_totals(_ignored):
     return pd.DataFrame([
         {"Item": "Teriyaki Chicken", "Total Quantity": 55, "Unit": "lbs"},
-        {"Item": "Rice",            "Total Quantity": 35, "Unit": "lbs"},
+        {"Item": "Rice", "Total Quantity": 35, "Unit": "lbs"},
         {"Item": "Soy Glazed Carrots", "Total Quantity": 33, "Unit": "lbs"},
         {"Item": "Roasted Broccoli", "Total Quantity": 30, "Unit": "lbs"},
     ])
@@ -77,7 +89,6 @@ def compute_totals(_df_ignored):
 # ---------- STEP 1 ----------
 st.markdown("## Step 1 — Upload Your Log")
 
-# Station Selector
 station = st.selectbox(
     "Select Meal Station",
     ["Stacked", "Simple Servings", "Sizzle", "Slices", "Twists", "Bliss"],
@@ -90,7 +101,6 @@ run_demo = st.button("Process Log")
 
 if run_demo:
 
-    # Totals are preset for the presentation
     totals_df = compute_totals(None)
 
     # ---------- STEP 2 ----------
@@ -98,19 +108,17 @@ if run_demo:
     st.markdown(f"## Step 2 — Review Totals ({station} Station)")
     st.dataframe(totals_df, use_container_width=True)
 
+    # Create dynamic CSV filename
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    station_clean = station.replace(" ", "_").lower()
+    filename = f"{station_clean}_{timestamp}.csv"
+
+    csv_bytes = totals_df.to_csv(index=False).encode("utf-8")
+
     # ---------- STEP 3 ----------
     st.markdown("---")
     st.markdown("## Step 3 — Export or Email CSV")
 
-    # Create timestamped filename with station name
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    station_clean = station.replace(" ", "_").lower()  # e.g., "Simple Servings" → "simple_servings"
-    filename = f"{station_clean}_{timestamp}.csv"
-
-    # Convert to CSV bytes (for download + email)
-    csv_bytes = totals_df.to_csv(index=False).encode("utf-8")
-
-    # DOWNLOAD BUTTON (optional)
     st.download_button(
         label=f"Download CSV ({filename})",
         data=csv_bytes,
@@ -118,11 +126,12 @@ if run_demo:
         mime="text/csv"
     )
 
-    # EMAIL SECTION
+    # Email UI
     st.markdown("### Email CSV File")
 
     sender_email = st.text_input("Sender Email", value="gaeldining@stmarys.edu")
     recipient_email = st.text_input("Recipient Email")
+
     email_subject = f"{station} Station – Gael Dining Log Summary"
     email_body = f"Attached is the food log summary for the {station} station."
 
