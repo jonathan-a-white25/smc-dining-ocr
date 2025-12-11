@@ -1,127 +1,122 @@
-# --------------------------------------------------------
-# SMC Dining OCR — DEMO VERSION (No OCR, Hardcoded Data)
-# Author: Jonathan White
-# Date: December 2025
-# --------------------------------------------------------
-
-import streamlit as st
+    import streamlit as st
 import pandas as pd
-import smtplib
-import ssl
-from email.message import EmailMessage
+import json
+from google.cloud import vision
 
-# --------------------------------------------------------
-# PAGE CONFIGURATION
-# --------------------------------------------------------
-st.set_page_config(page_title="SMC Dining OCR", layout="wide")
+# =========================================================
+#  Page Setup
+# =========================================================
+st.set_page_config(page_title="SMC Dining OCR", layout="centered")
 
-SMC_NAVY = "#002855"
-SMC_RED = "#C8102E"
+st.image("assets/smc_g_logo2.png", width=120)
+st.title("SMC Dining OCR – Rebuilt Version")
 
-# Logo path
-logo_path = "assets/smc_g_logo.png"
+st.write("Upload a photo of the tracking sheet. The app will extract text, parse quantities, consolidate items, and let you download a clean CSV.")
 
-# --------------------------------------------------------
-# TOP BANNER
-# --------------------------------------------------------
-st.markdown(
-    f"""
-    <div style="background-color:{SMC_NAVY};padding:15px 25px;border-radius:8px;display:flex;justify-content:space-between;align-items:center;">
-        <div>
-            <h1 style="color:white;margin-bottom:4px;">📋 SMC Dining OCR (Demo)</h1>
-            <p style="color:white;margin-top:0;font-size:16px;">Built by Jonathan White · Demo Version (Hardcoded Data)</p>
-        </div>
-        <img src="{logo_path}" width="80" style="border-radius:6px;margin-left:10px;">
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-st.write("""
-This demo displays **pre-loaded food production data** and sends a CSV summary by email.
-No OCR is used.  
-""")
-
-# --------------------------------------------------------
-# HARDCODED DATA FOR DEMO
-# --------------------------------------------------------
-def get_demo_df():
-    data = [
-        {"Item": "Teriyaki Chicken", "Total Quantity (lbs)": 55},
-        {"Item": "Rice", "Total Quantity (lbs)": 35},
-        {"Item": "Soy Glazed Carrots", "Total Quantity (lbs)": 33},
-        {"Item": "Roasted Broccoli", "Total Quantity (lbs)": 30},
-    ]
-    return pd.DataFrame(data)
-
-df = get_demo_df()
-
-# --------------------------------------------------------
-# DISPLAY DEMO DATA
-# --------------------------------------------------------
-st.markdown(f"""
-<div style='background-color:{SMC_RED};padding:10px;border-radius:6px;'>
-<h3 style='color:white;text-align:center;margin:0;'>Demo Data Preview</h3>
-</div>
-""", unsafe_allow_html=True)
-
-st.dataframe(df, use_container_width=True)
-
-csv_bytes = df.to_csv(index=False).encode("utf-8")
-
-# --------------------------------------------------------
-# EMAIL SENDING FUNCTION
-# --------------------------------------------------------
-def send_email_with_attachment(recipient, note_text, csv_bytes):
-    sender = st.secrets["gmail"]["email"]
-    app_pw = st.secrets["gmail"]["app_password"]
-
-    msg = EmailMessage()
-    msg["From"] = sender
-    msg["To"] = recipient
-    msg["Subject"] = "SMC Dining OCR Demo Report"
-
-    body = note_text if note_text else "Attached is the SMC Dining OCR demo report."
-    msg.set_content(body)
-
-    msg.add_attachment(
-        csv_bytes,
-        maintype="text",
-        subtype="csv",
-        filename="smc_dining_demo_report.csv"
-    )
-
-    context = ssl.create_default_context()
-
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-        server.login(sender, app_pw)
-        server.send_message(msg)
-
-# --------------------------------------------------------
-# EMAIL UI
-# --------------------------------------------------------
-st.markdown("<br>", unsafe_allow_html=True)
-st.markdown(
-    f"""
-    <div style='background-color:{SMC_NAVY};padding:10px;border-radius:6px;'>
-        <h3 style='color:white;text-align:center;margin:0;'>Send Demo CSV</h3>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
-
-recipient_email = st.text_input("Recipient Email:", value="jon.whitea@gmail.com")
-note_text = st.text_area("Optional Note:", placeholder="Example: Lunch prep totals for today.")
-
-if st.button("📤 Send CSV Now", use_container_width=True):
+# =========================================================
+#  Google Vision Client Loader
+# =========================================================
+@st.cache_resource
+def load_vision_client():
     try:
-        send_email_with_attachment(recipient_email, note_text, csv_bytes)
-        st.success(f"Email sent to {recipient_email} successfully!")
+        key_data = st.secrets["google_cloud"]["vision_key"]
+        client = vision.ImageAnnotatorClient.from_service_account_info(key_data)
+        return client
     except Exception as e:
-        st.error(f"Email failed: {e}")
+        st.error(f"Failed to load Google Vision credentials: {e}")
+        return None
 
-# FOOTER
-st.markdown("<br><hr>", unsafe_allow_html=True)
-st.caption("Saint Mary’s College Dining Data Project · Team 1")
+
+# =========================================================
+#  OCR Function
+# =========================================================
+def extract_text_from_image(image_bytes, client):
+    try:
+        image = vision.Image(content=image_bytes)
+        response = client.text_detection(image=image)
+        if response.error.message:
+            st.error(f"OCR Error: {response.error.message}")
+            return ""
+
+        # raw detected text
+        return response.full_text_annotation.text
+    except Exception as e:
+        st.error(f"OCR failed: {e}")
+        return ""
+
+
+# =========================================================
+#  Parsing Logic – Clean, Deterministic, No Bounding Boxes
+# =========================================================
+def parse_ocr_text(raw_text):
+    """
+    Approach:
+    1. Split lines.
+    2. Normalize text.
+    3. Extract item + quantity if line ends with a number.
+    4. Consolidate repeated items.
+    """
+
+    lines = raw_text.split("\n")
+    parsed_items = {}
+
+    for line in lines:
+        clean = line.strip().lower()
+
+        if not clean:
+            continue
+
+        # Try to split out an ending number (quantity)
+        parts = clean.rsplit(" ", 1)
+
+        if len(parts) == 2 and parts[1].replace(".", "", 1).isdigit():
+            item = parts[0].strip()
+            qty = float(parts[1])
+
+            # Basic synonym handling
+            if "broccoli" in item:
+                item = "broccoli (all types)"
+            if "rice" in item:
+                item = "rice"
+            if "chicken" in item:
+                item = "chicken"
+
+            parsed_items[item] = parsed_items.get(item, 0) + qty
+
+    return parsed_items
+
+
+# =========================================================
+#  Streamlit Interface
+# =========================================================
+client = load_vision_client()
+
+uploaded_file = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg"])
+
+if uploaded_file is not None and client is not None:
+    st.subheader("Step 1: OCR Extraction")
+
+    image_bytes = uploaded_file.read()
+    raw_text = extract_text_from_image(image_bytes, client)
+
+    if raw_text:
+        st.text_area("Raw OCR Output", raw_text, height=200)
+
+        st.subheader("Step 2: Parsed Items")
+        parsed_dict = parse_ocr_text(raw_text)
+
+        df = pd.DataFrame(
+            [{"item": k.title(), "quantity": v} for k, v in parsed_dict.items()]
+        )
+
+        st.dataframe(df, use_container_width=True)
+
+        st.subheader("Step 3: Download CSV")
+
+        csv_data = df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download CSV",
+            data=csv_data,
+            file_name="parsed_items.csv",
+            mime="text/csv",
+        )
