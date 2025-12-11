@@ -40,7 +40,7 @@ STATIONS = [
 
 
 # =========================================================
-#  Demo Totals (for presentation)
+#  Demo Totals
 # =========================================================
 def get_demo_totals():
     rows = [
@@ -77,9 +77,9 @@ def banner(text, color):
 
 
 # =========================================================
-#  STEP 1 — Upload Section
+#  STEP 1
 # =========================================================
-banner("Step 1 — Upload Your Tracking Log", "#B3001B")  # SMC Red
+banner("Step 1 — Upload Your Tracking Log", "#B3001B")
 
 station_name = st.selectbox("Select Meal Station:", STATIONS, index=0)
 
@@ -92,30 +92,24 @@ run_demo = st.button("Process Log")
 
 
 # =========================================================
-#  PROCESSING STEPS
+#  MAIN LOGIC — EVERYTHING BELOW REQUIRES run_demo
 # =========================================================
 if run_demo:
 
-    # =========================================================
-    #  STEP 2 — Display Totals
-    # =========================================================
-    banner("Step 2 — Review Grouped Totals", "#002B5C")  # SMC Navy
+    # STEP 2
+    banner("Step 2 — Review Grouped Totals", "#002B5C")
 
     totals_df = get_demo_totals()
     st.dataframe(totals_df, use_container_width=True)
 
-    # Pacific Time timestamping
     pt = datetime.now(ZoneInfo("America/Los_Angeles"))
     date_str = pt.strftime("%Y-%m-%d")
     time_str = pt.strftime("%H-%M-%S")
 
-    # Filename with hyphens for station names
     station_clean = station_name.replace(" ", "-")
     filename = f"{station_clean}_{date_str}_{time_str}.csv"
-
     csv_bytes = totals_df.to_csv(index=False).encode("utf-8")
 
-    # Download button
     st.download_button(
         label=f"Download CSV ({filename})",
         data=csv_bytes,
@@ -124,10 +118,8 @@ if run_demo:
     )
 
 
-    # =========================================================
-    #  STEP 3 — Email the CSV
-    # =========================================================
-    banner("Step 3 — Email the CSV File", "#1E7F3B")  # green
+    # STEP 3 — MUST BE INSIDE run_demo
+    banner("Step 3 — Email the CSV File", "#1E7F3B")
 
     st.info("Use your verified SendGrid sender email: jon.whitea@gmail.com")
 
@@ -143,11 +135,13 @@ if run_demo:
 
         if submit_email:
 
+            st.write("Button press detected.")  # DEBUG
+
             if not sender or not recipient:
                 st.error("Both sender and recipient are required.")
 
             else:
-                st.write("Attempting to send email...")  # debug
+                st.write("Attempting to send email...")  # DEBUG
 
                 subject = f"{station_name} Log – {date_str} ({time_str} PT)"
 
