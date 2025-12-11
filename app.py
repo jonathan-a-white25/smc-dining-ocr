@@ -1,17 +1,26 @@
 import streamlit as st
 import pandas as pd
-import re
+import base64
 from google.cloud import vision
+
+# =========================================================
+#  Helper: Convert logo to Base64
+# =========================================================
+def get_base64_image(image_path):
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode()
+
+logo_base64 = get_base64_image("assets/smc_g_logo2.png")
 
 # =========================================================
 #  Page Setup
 # =========================================================
-st.set_page_config(page_title="SMC Dining OCR", layout="centered")
+st.set_page_config(page_title="SMC Dining OCR – Prototype", layout="centered")
 
 # =========================================================
-#  Banner Styling
+#  Banner Styling (with embedded base64 logo)
 # =========================================================
-RED_BANNER = """
+RED_BANNER = f"""
 <div style="
     background-color: #D7263D;
     padding: 18px;
@@ -20,8 +29,8 @@ RED_BANNER = """
     display: flex;
     align-items: center;
 ">
-    <img src="assets/smc_g_logo2.png" style="height:60px; margin-right:20px;">
-    <h1 style="color:white; margin:0; font-size:32px;">SMC Dining OCR</h1>
+    <img src="data:image/png;base64,{logo_base64}" style="height:60px; margin-right:20px;">
+    <h1 style="color:white; margin:0; font-size:32px;">SMC Dining OCR – Prototype</h1>
 </div>
 """
 
@@ -49,14 +58,12 @@ RED_BANNER_TEMPLATE = """
 </div>
 """
 
-# =========================================================
-#  Banner Rendering
-# =========================================================
+# Render header banner
 st.markdown(RED_BANNER, unsafe_allow_html=True)
 
 st.write(
     "Upload a photo of the tracking sheet. The app will run OCR, show the raw text, "
-    "and display a parsed summary."
+    "and display a parsed summary (prototype output)."
 )
 
 # =========================================================
@@ -88,7 +95,7 @@ def extract_text_from_image(image_bytes, client):
         return ""
 
 # =========================================================
-#  ALWAYS-SHOWN HARDCODED SUMMARY
+#  Always Hardcoded Parsed Output
 # =========================================================
 def get_fixed_output():
     summary = {
@@ -97,7 +104,6 @@ def get_fixed_output():
         "Soy Glazed Carrots": 33,
         "Roasted Broccoli": 25,
     }
-
     df = pd.DataFrame(
         [{"item": item, "quantity": qty} for item, qty in summary.items()]
     )
@@ -109,9 +115,7 @@ def get_fixed_output():
 client = load_vision_client()
 uploaded_file = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg"])
 
-# -------------------------
-#  STEP 1 – OCR EXTRACTION
-# -------------------------
+# STEP 1
 st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 1: Upload & OCR Extraction"), unsafe_allow_html=True)
 
 if uploaded_file is not None and client is not None:
@@ -122,21 +126,15 @@ if uploaded_file is not None and client is not None:
     if raw_text:
         st.text_area("Raw OCR Output", raw_text, height=220)
 
+        # STEP 2
+        st.markdown(RED_BANNER_TEMPLATE.format(text="Step 2: Parsed Items (Prototype Output)"), unsafe_allow_html=True)
 
-        # -------------------------
-        #  STEP 2 – PARSED ITEMS
-        # -------------------------
-        st.markdown(RED_BANNER_TEMPLATE.format(text="Step 2: Parsed Items"), unsafe_allow_html=True)
-
-        st.write("Below is the summarized output:")
+        st.write("Below is the summarized output the system is designed to produce:")
 
         df = get_fixed_output()
         st.dataframe(df, use_container_width=True)
 
-
-        # -------------------------
-        #  STEP 3 – CSV DOWNLOAD
-        # -------------------------
+        # STEP 3
         st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 3: Download CSV"), unsafe_allow_html=True)
 
         csv_data = df.to_csv(index=False).encode("utf-8")
@@ -146,5 +144,6 @@ if uploaded_file is not None and client is not None:
             file_name="parsed_items.csv",
             mime="text/csv",
         )
+
 else:
     st.info("Upload an image above to begin.")
