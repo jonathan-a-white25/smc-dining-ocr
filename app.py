@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import base64
 from google.cloud import vision
+from datetime import datetime
+from zoneinfo import ZoneInfo  # For Pacific Time
 
 # =========================================================
 #  Helper: Convert logo to Base64
@@ -97,7 +99,7 @@ def extract_text_from_image(image_bytes, client):
 # =========================================================
 #  Always Hardcoded Parsed Output
 # =========================================================
-def get_fixed_output(station_name):
+def get_fixed_output(station_name, selected_date):
     summary = {
         "Teriyaki Chicken": 55,
         "Rice": 45,
@@ -107,7 +109,7 @@ def get_fixed_output(station_name):
 
     df = pd.DataFrame(
         [
-            {"station": station_name, "item": item, "quantity": qty}
+            {"station": station_name, "date": selected_date, "item": item, "quantity": qty}
             for item, qty in summary.items()
         ]
     )
@@ -123,12 +125,15 @@ client = load_vision_client()
 # -------------------------
 st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 1: Upload & OCR Extraction"), unsafe_allow_html=True)
 
-# ADDING STATION DROPDOWN (The only requested change)
+# Station dropdown
 station_name = st.selectbox(
     "Select Station",
     ["Stacked", "Simple Servings", "Sizzle", "Slices", "Twists", "Bliss"],
-    index=2  # defaults to "Sizzle"
+    index=2
 )
+
+# Date picker
+selected_date = st.date_input("Select Date")
 
 uploaded_file = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg"])
 
@@ -143,19 +148,31 @@ if uploaded_file is not None and client is not None:
         # STEP 2
         st.markdown(RED_BANNER_TEMPLATE.format(text="Step 2: Parsed Items"), unsafe_allow_html=True)
 
-        st.write(f"Summarized output for **{station_name}**:")
+        st.write(f"Summarized output for **{station_name}** on **{selected_date}**:")
 
-        df = get_fixed_output(station_name)
+        df = get_fixed_output(station_name, selected_date)
         st.dataframe(df, use_container_width=True)
 
         # STEP 3
         st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 3: Download CSV"), unsafe_allow_html=True)
 
+        # Generate Pacific Time timestamp for filename
+        pacific_now = datetime.now(ZoneInfo("America/Los_Angeles"))
+        timestamp_str = pacific_now.strftime("%H-%M-%S_%Z")  # e.g. "14-32-05_PST"
+
+        # Build filename
+        filename = (
+            f"{station_name.replace(' ', '_').lower()}"
+            f"_{selected_date}"
+            f"_{timestamp_str}.csv"
+        )
+
         csv_data = df.to_csv(index=False).encode("utf-8")
+
         st.download_button(
             label="Download CSV",
             data=csv_data,
-            file_name=f"{station_name.replace(' ', '_').lower()}_parsed_items.csv",
+            file_name=filename,
             mime="text/csv",
         )
 
