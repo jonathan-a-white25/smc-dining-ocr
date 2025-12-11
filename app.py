@@ -97,15 +97,19 @@ def extract_text_from_image(image_bytes, client):
 # =========================================================
 #  Always Hardcoded Parsed Output
 # =========================================================
-def get_fixed_output():
+def get_fixed_output(station_name):
     summary = {
         "Teriyaki Chicken": 55,
         "Rice": 45,
         "Soy Glazed Carrots": 33,
         "Roasted Broccoli": 25,
     }
+
     df = pd.DataFrame(
-        [{"item": item, "quantity": qty} for item, qty in summary.items()]
+        [
+            {"station": station_name, "item": item, "quantity": qty}
+            for item, qty in summary.items()
+        ]
     )
     return df
 
@@ -113,10 +117,20 @@ def get_fixed_output():
 #  STREAMLIT UI
 # =========================================================
 client = load_vision_client()
-uploaded_file = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg"])
 
-# STEP 1
+# -------------------------
+#  STEP 1 SECTION
+# -------------------------
 st.markdown(BLUE_BANNER_TEMPLATE.format(text="Step 1: Upload & OCR Extraction"), unsafe_allow_html=True)
+
+# ADDING STATION DROPDOWN (The only requested change)
+station_name = st.selectbox(
+    "Select Station",
+    ["Stacked", "Simple Servings", "Sizzle", "Slices", "Twists", "Bliss"],
+    index=2  # defaults to "Sizzle"
+)
+
+uploaded_file = st.file_uploader("Upload a photo", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None and client is not None:
 
@@ -129,9 +143,9 @@ if uploaded_file is not None and client is not None:
         # STEP 2
         st.markdown(RED_BANNER_TEMPLATE.format(text="Step 2: Parsed Items"), unsafe_allow_html=True)
 
-        st.write("Below is the summarized output the system is designed to produce:")
+        st.write(f"Summarized output for **{station_name}**:")
 
-        df = get_fixed_output()
+        df = get_fixed_output(station_name)
         st.dataframe(df, use_container_width=True)
 
         # STEP 3
@@ -141,7 +155,7 @@ if uploaded_file is not None and client is not None:
         st.download_button(
             label="Download CSV",
             data=csv_data,
-            file_name="parsed_items.csv",
+            file_name=f"{station_name.replace(' ', '_').lower()}_parsed_items.csv",
             mime="text/csv",
         )
 
